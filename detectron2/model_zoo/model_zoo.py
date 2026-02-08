@@ -1,7 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 import os
 from typing import Optional
-import pkg_resources
+import importlib.resources
 import torch
 
 from detectron2.checkpoint import DetectionCheckpointer
@@ -121,7 +121,9 @@ def get_checkpoint_url(config_path):
     """
     url = _ModelZooUrls.query(config_path)
     if url is None:
-        raise RuntimeError("Pretrained model for {} is not available!".format(config_path))
+        raise RuntimeError(
+            "Pretrained model for {} is not available!".format(config_path)
+        )
     return url
 
 
@@ -136,12 +138,13 @@ def get_config_file(config_path):
     Returns:
         str: the real path to the config file.
     """
-    cfg_file = pkg_resources.resource_filename(
-        "detectron2.model_zoo", os.path.join("configs", config_path)
+    cfg_file = (
+        importlib.resources.files("detectron2.model_zoo") / "configs" / config_path
     )
-    if not os.path.exists(cfg_file):
+    if not cfg_file.is_file():
         raise RuntimeError("{} not available in Model Zoo!".format(config_path))
-    return cfg_file
+    with importlib.resources.as_file(cfg_file) as file:
+        return file
 
 
 def get_config(config_path, trained: bool = False):
