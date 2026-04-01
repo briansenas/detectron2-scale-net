@@ -1,5 +1,4 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-
 from .launch import *
 from .train_loop import *
 
@@ -16,4 +15,5 @@ from .defaults import (
     default_writers,
     DefaultPredictor,
     DefaultTrainer,
+    CalibTrainer,
 )

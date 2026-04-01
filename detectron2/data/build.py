@@ -1,33 +1,42 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 import itertools
 import logging
-import numpy as np
 import operator
 import pickle
-from collections import OrderedDict, defaultdict
-from typing import Any, Callable, Dict, List, Optional, Union
+from collections import defaultdict
+from collections import OrderedDict
+from typing import Any
+from typing import Callable
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Union
+
+import numpy as np
 import torch
 import torch.utils.data as torchdata
 from tabulate import tabulate
 from termcolor import colored
 
+from .catalog import DatasetCatalog
+from .catalog import MetadataCatalog
+from .common import AspectRatioGroupedDataset
+from .common import DatasetFromList
+from .common import MapDataset
+from .common import ToIterableDataset
+from .dataset_mapper import DatasetMapper
+from .detection_utils import check_metadata_consistency
+from .samplers import InferenceSampler
+from .samplers import RandomSubsetTrainingSampler
+from .samplers import RepeatFactorTrainingSampler
+from .samplers import TrainingSampler
 from detectron2.config import configurable
 from detectron2.structures import BoxMode
 from detectron2.utils.comm import get_world_size
 from detectron2.utils.env import seed_all_rng
 from detectron2.utils.file_io import PathManager
-from detectron2.utils.logger import _log_api_usage, log_first_n
-
-from .catalog import DatasetCatalog, MetadataCatalog
-from .common import AspectRatioGroupedDataset, DatasetFromList, MapDataset, ToIterableDataset
-from .dataset_mapper import DatasetMapper
-from .detection_utils import check_metadata_consistency
-from .samplers import (
-    InferenceSampler,
-    RandomSubsetTrainingSampler,
-    RepeatFactorTrainingSampler,
-    TrainingSampler,
-)
+from detectron2.utils.logger import _log_api_usage
+from detectron2.utils.logger import log_first_n
 
 """
 This file contains the default logic to build a dataloader for training or testing.
@@ -68,8 +77,9 @@ def filter_images_with_only_crowd_annotations(dataset_dicts):
     logger = logging.getLogger(__name__)
     logger.info(
         "Removed {} images with no usable annotations. {} images left.".format(
-            num_before - num_after, num_after
-        )
+            num_before - num_after,
+            num_after,
+        ),
     )
     return dataset_dicts
 
@@ -96,14 +106,17 @@ def filter_images_with_few_keypoints(dataset_dicts, min_keypoints_per_image):
         )
 
     dataset_dicts = [
-        x for x in dataset_dicts if visible_keypoints_in_image(x) >= min_keypoints_per_image
+        x
+        for x in dataset_dicts
+        if visible_keypoints_in_image(x) >= min_keypoints_per_image
     ]
     num_after = len(dataset_dicts)
     logger = logging.getLogger(__name__)
     logger.info(
         "Removed {} images with fewer than {} keypoints.".format(
-            num_before - num_after, min_keypoints_per_image
-        )
+            num_before - num_after,
+            min_keypoints_per_image,
+        ),
     )
     return dataset_dicts
 
@@ -142,10 +155,16 @@ def load_proposals_into_dataset(dataset_dicts, proposal_file):
     # Fetch the indexes of all proposals that are in the dataset
     # Convert image_id to str since they could be int.
     img_ids = set({str(record["image_id"]) for record in dataset_dicts})
-    id_to_index = {str(id): i for i, id in enumerate(proposals["ids"]) if str(id) in img_ids}
+    id_to_index = {
+        str(id): i for i, id in enumerate(proposals["ids"]) if str(id) in img_ids
+    }
 
     # Assuming default bbox_mode of precomputed proposals are 'XYXY_ABS'
-    bbox_mode = BoxMode(proposals["bbox_mode"]) if "bbox_mode" in proposals else BoxMode.XYXY_ABS
+    bbox_mode = (
+        BoxMode(proposals["bbox_mode"])
+        if "bbox_mode" in proposals
+        else BoxMode.XYXY_ABS
+    )
 
     for record in dataset_dicts:
         # Get the index of the proposal
@@ -174,7 +193,8 @@ def print_instances_class_histogram(dataset_dicts, class_names):
     for entry in dataset_dicts:
         annos = entry["annotations"]
         classes = np.asarray(
-            [x["category_id"] for x in annos if not x.get("iscrowd", 0)], dtype=int
+            [x["category_id"] for x in annos if not x.get("iscrowd", 0)],
+            dtype=int,
         )
         if len(classes):
             assert classes.min() >= 0, f"Got an invalid category_id={classes.min()}"
@@ -192,7 +212,9 @@ def print_instances_class_histogram(dataset_dicts, class_names):
         return x
 
     data = list(
-        itertools.chain(*[[short_name(class_names[i]), int(v)] for i, v in enumerate(histogram)])
+        itertools.chain(
+            *[[short_name(class_names[i]), int(v)] for i, v in enumerate(histogram)],
+        ),
     )
     total_num_instances = sum(data[1::2])
     data.extend([None] * (N_COLS - (len(data) % N_COLS)))
@@ -247,7 +269,7 @@ def get_detection_dataset_dicts(
         logger.warning(
             "The following dataset names are not registered in the DatasetCatalog: "
             f"{names_set - available_datasets}. "
-            f"Available datasets are {available_datasets}"
+            f"Available datasets are {available_datasets}",
         )
 
     dataset_dicts = [DatasetCatalog.get(dataset_name) for dataset_name in names]
@@ -259,7 +281,6 @@ def get_detection_dataset_dicts(
             # not a good idea to concat iterables anyway.
             return torchdata.ConcatDataset(dataset_dicts)
         return dataset_dicts[0]
-
     for dataset_name, dicts in zip(names, dataset_dicts):
         assert len(dicts), "Dataset '{}' is empty!".format(dataset_name)
 
@@ -332,7 +353,7 @@ def build_batch_data_loader(
         if total_batch_size:
             raise ValueError(
                 """total_batch_size and single_gpu_batch_size are mutually incompatible.
-                Please specify only one. """
+                Please specify only one. """,
             )
         batch_size = single_gpu_batch_size
     else:
@@ -340,7 +361,8 @@ def build_batch_data_loader(
         assert (
             total_batch_size > 0 and total_batch_size % world_size == 0
         ), "Total batch size ({}) must be divisible by the number of gpus ({}).".format(
-            total_batch_size, world_size
+            total_batch_size,
+            world_size,
         )
         batch_size = total_batch_size // world_size
     logger = logging.getLogger(__name__)
@@ -361,7 +383,9 @@ def build_batch_data_loader(
         data_loader = torchdata.DataLoader(
             dataset,
             num_workers=num_workers,
-            collate_fn=operator.itemgetter(0),  # don't batch, but yield individual elements
+            collate_fn=operator.itemgetter(
+                0,
+            ),  # don't batch, but yield individual elements
             worker_init_fn=worker_init_reset_seed,
             prefetch_factor=prefetch_factor if num_workers > 0 else None,
             persistent_workers=persistent_workers,
@@ -417,11 +441,13 @@ def _build_weighted_sampler(cfg, enable_category_balance=False):
                     else 0
                 ),
                 proposal_files=(
-                    cfg.DATASETS.PROPOSAL_FILES_TRAIN if cfg.MODEL.LOAD_PROPOSALS else None
+                    cfg.DATASETS.PROPOSAL_FILES_TRAIN
+                    if cfg.MODEL.LOAD_PROPOSALS
+                    else None
                 ),
             )
             for name in cfg.DATASETS.TRAIN
-        }
+        },
     )
     # Repeat factor for every sample in the dataset
     repeat_factors = [
@@ -441,25 +467,29 @@ def _build_weighted_sampler(cfg, enable_category_balance=False):
         """
         category_repeat_factors = [
             RepeatFactorTrainingSampler.repeat_factors_from_category_frequency(
-                dataset_dict, cfg.DATALOADER.REPEAT_THRESHOLD, sqrt=cfg.DATALOADER.REPEAT_SQRT
+                dataset_dict,
+                cfg.DATALOADER.REPEAT_THRESHOLD,
+                sqrt=cfg.DATALOADER.REPEAT_SQRT,
             )
             for dataset_dict in dataset_name_to_dicts.values()
         ]
         # flatten the category repeat factors from all datasets
-        category_repeat_factors = list(itertools.chain.from_iterable(category_repeat_factors))
+        category_repeat_factors = list(
+            itertools.chain.from_iterable(category_repeat_factors),
+        )
         category_repeat_factors = torch.tensor(category_repeat_factors)
         repeat_factors = torch.mul(category_repeat_factors, repeat_factors)
         repeat_factors = repeat_factors / torch.min(repeat_factors)
         logger.info(
             "Using WeightedCategoryTrainingSampler with repeat_factors={}".format(
-                cfg.DATASETS.TRAIN_REPEAT_FACTOR
-            )
+                cfg.DATASETS.TRAIN_REPEAT_FACTOR,
+            ),
         )
     else:
         logger.info(
             "Using WeightedTrainingSampler with repeat_factors={}".format(
-                cfg.DATASETS.TRAIN_REPEAT_FACTOR
-            )
+                cfg.DATASETS.TRAIN_REPEAT_FACTOR,
+            ),
         )
 
     sampler = RepeatFactorTrainingSampler(repeat_factors)
@@ -472,9 +502,13 @@ def _train_loader_from_config(cfg, mapper=None, *, dataset=None, sampler=None):
             cfg.DATASETS.TRAIN,
             filter_empty=cfg.DATALOADER.FILTER_EMPTY_ANNOTATIONS,
             min_keypoints=(
-                cfg.MODEL.ROI_KEYPOINT_HEAD.MIN_KEYPOINTS_PER_IMAGE if cfg.MODEL.KEYPOINT_ON else 0
+                cfg.MODEL.ROI_KEYPOINT_HEAD.MIN_KEYPOINTS_PER_IMAGE
+                if cfg.MODEL.KEYPOINT_ON
+                else 0
             ),
-            proposal_files=cfg.DATASETS.PROPOSAL_FILES_TRAIN if cfg.MODEL.LOAD_PROPOSALS else None,
+            proposal_files=(
+                cfg.DATASETS.PROPOSAL_FILES_TRAIN if cfg.MODEL.LOAD_PROPOSALS else None
+            ),
         )
         _log_api_usage("dataset." + cfg.DATASETS.TRAIN[0])
 
@@ -492,13 +526,18 @@ def _train_loader_from_config(cfg, mapper=None, *, dataset=None, sampler=None):
             if sampler_name == "TrainingSampler":
                 sampler = TrainingSampler(len(dataset), seed=cfg.SEED)
             elif sampler_name == "RepeatFactorTrainingSampler":
-                repeat_factors = RepeatFactorTrainingSampler.repeat_factors_from_category_frequency(
-                    dataset, cfg.DATALOADER.REPEAT_THRESHOLD, sqrt=cfg.DATALOADER.REPEAT_SQRT
+                repeat_factors = (
+                    RepeatFactorTrainingSampler.repeat_factors_from_category_frequency(
+                        dataset,
+                        cfg.DATALOADER.REPEAT_THRESHOLD,
+                        sqrt=cfg.DATALOADER.REPEAT_SQRT,
+                    )
                 )
                 sampler = RepeatFactorTrainingSampler(repeat_factors, seed=cfg.SEED)
             elif sampler_name == "RandomSubsetTrainingSampler":
                 sampler = RandomSubsetTrainingSampler(
-                    len(dataset), cfg.DATALOADER.RANDOM_SUBSET_RATIO
+                    len(dataset),
+                    cfg.DATALOADER.RANDOM_SUBSET_RATIO,
                 )
             elif sampler_name == "WeightedTrainingSampler":
                 sampler = _build_weighted_sampler(cfg)
@@ -571,7 +610,10 @@ def build_detection_train_loader(
     else:
         if sampler is None:
             sampler = TrainingSampler(len(dataset))
-        assert isinstance(sampler, torchdata.Sampler), f"Expect a Sampler but got {type(sampler)}"
+        assert isinstance(
+            sampler,
+            torchdata.Sampler,
+        ), f"Expect a Sampler but got {type(sampler)}"
     return build_batch_data_loader(
         dataset,
         sampler,

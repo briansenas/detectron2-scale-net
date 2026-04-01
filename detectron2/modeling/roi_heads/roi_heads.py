@@ -1089,12 +1089,14 @@ class CombinedClassifierHeads(ROIHeads):
         proposals: List[Instances],
         targets: Optional[List[Instances]] = None,
     ):
-        assert targets, "'targets' argument is required during training"
         losses = {}
-        horizon_targets = [x["gt_horizon"] for x in targets]
-        pitch_targets = [x["gt_pitch"] for x in targets]
-        roll_targets = [x["gt_roll"] for x in targets]
-        vfov_targets = [x["gt_vfov"] for x in targets]
+        horizon_targets = pitch_targets = roll_targets = vfov_targets = []
+        if self.training:
+            assert targets, "'targets' argument is required during training"
+            horizon_targets = [x["gt_horizon"] for x in targets]
+            pitch_targets = [x["gt_pitch"] for x in targets]
+            roll_targets = [x["gt_roll"] for x in targets]
+            vfov_targets = [x["gt_vfov"] for x in targets]
         horizon_logits, horizon_loss = self.classifier_horizon(
             images,
             features,

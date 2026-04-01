@@ -176,10 +176,23 @@ class ClassifierRCNN(nn.Module):
             Otherwise, a list[Instances] containing raw network outputs.
         """
         assert not self.training
-
+        for i, _ in enumerate(batched_inputs):
+            x = batched_inputs[i]["logits"].copy()
+            batched_inputs[i]["logits"] = dict(
+                gt_horizon=x["gt_horizon"].to(self.device),
+                gt_pitch=x["gt_pitch"].to(self.device),
+                gt_roll=x["gt_roll"].to(self.device),
+                gt_vfov=x["gt_vfov"].to(self.device),
+            )
         images = self.preprocess_image(batched_inputs)
         features = self.backbone(images.tensor)
-        results, _ = self.roi_heads(images, features, None)
+        if self.proposal_generator is not None:
+            proposals, _ = self.proposal_generator(images, features, None)
+        else:
+            assert "proposals" in batched_inputs[0]
+            proposals = [x["proposals"].to(self.device) for x in batched_inputs]
+
+        results, _ = self.roi_heads(images, features, proposals, None)
         return results
 
     def showHorizonLine(
