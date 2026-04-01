@@ -1,7 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-from . import datasets
-from . import samplers
-from . import transforms  # isort:skip
+from . import transforms  # isort:skip noreorder
 from .build import build_batch_data_loader
 from .build import build_detection_test_loader
 from .build import build_detection_train_loader
@@ -18,5 +16,7 @@ from .dataset_mapper import CalibMapper
 from .dataset_mapper import DatasetMapper
 
 # ensure the builtin datasets are registered
+from . import datasets  # noreorder
+from . import samplers  # noreorder
 
 __all__ = [k for k in globals().keys() if not k.startswith("_")]
