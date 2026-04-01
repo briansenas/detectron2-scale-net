@@ -45,6 +45,8 @@ model_ts*.txt
 _darcs
 
 # project dirs
+datasets/
+data/
 /detectron2/model_zoo/configs
 /datasets/*
 !/datasets/*.*
