@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) Facebook, Inc. and its affiliates.
-import concurrent.futures
-import logging
 import numpy as np
-import time
-import weakref
-from typing import List, Mapping, Optional
 import torch
 from torch.nn.parallel import DataParallel, DistributedDataParallel
 
 import detectron2.utils.comm as comm
 from detectron2.utils.events import EventStorage, get_event_storage
 from detectron2.utils.logger import _log_api_usage
+
+import concurrent.futures
+import logging
+import time
+import weakref
+from typing import List, Mapping, Optional
 
 __all__ = ["HookBase", "TrainerBase", "SimpleTrainer", "AMPTrainer"]
 
@@ -217,7 +218,9 @@ class TrainerBase:
                     h.load_state_dict(value)
                     break
             else:
-                logger.warning(f"Cannot find the hook '{key}', its state_dict is ignored.")
+                logger.warning(
+                    f"Cannot find the hook '{key}', its state_dict is ignored.",
+                )
 
 
 class SimpleTrainer(TrainerBase):
@@ -323,7 +326,10 @@ class SimpleTrainer(TrainerBase):
         if self.async_write_metrics:
             # write metrics asynchronically
             self.concurrent_executor.submit(
-                self._write_metrics, loss_dict, data_time, iter=self.iter
+                self._write_metrics,
+                loss_dict,
+                data_time,
+                iter=self.iter,
             )
         else:
             self._write_metrics(loss_dict, data_time)
@@ -402,17 +408,20 @@ class SimpleTrainer(TrainerBase):
 
             # average the rest metrics
             metrics_dict = {
-                k: np.mean([x[k] for x in all_metrics_dict]) for k in all_metrics_dict[0].keys()
+                k: np.mean([x[k] for x in all_metrics_dict])
+                for k in all_metrics_dict[0].keys()
             }
             total_losses_reduced = sum(metrics_dict.values())
             if not np.isfinite(total_losses_reduced):
                 raise FloatingPointError(
                     f"Loss became infinite or NaN at iteration={cur_iter}!\n"
-                    f"loss_dict = {metrics_dict}"
+                    f"loss_dict = {metrics_dict}",
                 )
 
             storage.put_scalar(
-                "{}total_loss".format(prefix), total_losses_reduced, cur_iter=cur_iter
+                "{}total_loss".format(prefix),
+                total_losses_reduced,
+                cur_iter=cur_iter,
             )
             if len(metrics_dict) > 1:
                 storage.put_scalars(cur_iter=cur_iter, **metrics_dict)
@@ -456,17 +465,23 @@ class AMPTrainer(SimpleTrainer):
             grad_scaler: torch GradScaler to automatically scale gradients.
             precision: torch.dtype as the target precision to cast to in computations
         """
-        unsupported = "AMPTrainer does not support single-process multi-device training!"
+        unsupported = (
+            "AMPTrainer does not support single-process multi-device training!"
+        )
         if isinstance(model, DistributedDataParallel):
             assert not (model.device_ids and len(model.device_ids) > 1), unsupported
         assert not isinstance(model, DataParallel), unsupported
 
         super().__init__(
-            model, data_loader, optimizer, gather_metric_period, zero_grad_before_forward
+            model,
+            data_loader,
+            optimizer,
+            gather_metric_period,
+            zero_grad_before_forward,
         )
 
         if grad_scaler is None:
-            from torch.cuda.amp import GradScaler
+            from torch.amp import GradScaler
 
             grad_scaler = GradScaler()
         self.grad_scaler = grad_scaler
@@ -478,8 +493,10 @@ class AMPTrainer(SimpleTrainer):
         Implement the AMP training logic.
         """
         assert self.model.training, "[AMPTrainer] model was changed to eval mode!"
-        assert torch.cuda.is_available(), "[AMPTrainer] CUDA is required for AMP training!"
-        from torch.cuda.amp import autocast
+        assert (
+            torch.cuda.is_available()
+        ), "[AMPTrainer] CUDA is required for AMP training!"
+        from torch.amp import autocast
 
         start = time.perf_counter()
         data = next(self._data_loader_iter)
@@ -487,7 +504,7 @@ class AMPTrainer(SimpleTrainer):
 
         if self.zero_grad_before_forward:
             self.optimizer.zero_grad()
-        with autocast(dtype=self.precision):
+        with autocast(device_type="cuda", dtype=self.precision):
             loss_dict = self.model(data)
             if isinstance(loss_dict, torch.Tensor):
                 losses = loss_dict
@@ -509,7 +526,10 @@ class AMPTrainer(SimpleTrainer):
         if self.async_write_metrics:
             # write metrics asynchronically
             self.concurrent_executor.submit(
-                self._write_metrics, loss_dict, data_time, iter=self.iter
+                self._write_metrics,
+                loss_dict,
+                data_time,
+                iter=self.iter,
             )
         else:
             self._write_metrics(loss_dict, data_time)

@@ -1,23 +1,25 @@
-from typing import Dict
-from typing import List
-from typing import Optional
-from typing import Tuple
-
 import numpy as np
 import torch
-from PIL import Image
-from PIL import ImageDraw
 from torch import nn
 
-from ..backbone import Backbone
-from ..backbone import build_backbone
-from ..proposal_generator import build_proposal_generator
-from ..roi_heads import build_roi_heads
-from .build import META_ARCH_REGISTRY
 from detectron2.config import configurable
+from detectron2.data.datasets.pano360 import (
+    bins2pitch,
+    bins2roll,
+    bins2vfov,
+    showHorizonLine,
+)
+from detectron2.data.detection_utils import convert_image_to_rgb
 from detectron2.layers import move_device_like
 from detectron2.structures import ImageList
 from detectron2.utils.events import get_event_storage
+
+from typing import Dict, List, Optional, Tuple
+
+from ..backbone import Backbone, build_backbone
+from ..proposal_generator import build_proposal_generator
+from ..roi_heads import build_roi_heads
+from .build import META_ARCH_REGISTRY
 
 __all__ = ["ClassifierRCNN"]
 
@@ -195,30 +197,6 @@ class ClassifierRCNN(nn.Module):
         results, _ = self.roi_heads(images, features, proposals, None)
         return results
 
-    def showHorizonLine(
-        image,
-        vfov,
-        pitch,
-        roll,
-        color=(0, 255, 0),
-        width=5,
-    ):
-        """
-        Angles should be in radians.
-        """
-        h, w, _ = image.shape
-        if image.dtype in (np.float32, np.float64):
-            image = (image * 255).astype("uint8")
-
-        im = Image.fromarray(image)
-        draw = ImageDraw.Draw(im)
-
-        ctr = h * (0.5 - 0.5 * np.tan(pitch) / np.tan(vfov / 2))
-        l = ctr - w * np.tan(roll) / 2
-        r = ctr + w * np.tan(roll) / 2
-        draw.line((0, l, w, r), fill=color, width=width)
-        return np.array(im), ctr / h
-
     def visualize_training(self, batched_inputs, proposals):
         """
         A function used to visualize images and proposals.
@@ -229,22 +207,22 @@ class ClassifierRCNN(nn.Module):
             proposals (list): a list that contains predicted proposals. Both
                 batched_inputs and proposals should have the same length.
         """
-        raise NotImplementedError
-        # from detectron2.utils.visualizer import Visualizer
-
-        # storage = get_event_storage()
-
-        # for input, prop in zip(batched_inputs, proposals):
-        #     img = input["image"]
-        #     img = convert_image_to_rgb(img.permute(1, 2, 0), self.input_format)
-        # NOTE: Do something to transform the stored bins into values to the function.
-        # He uses the bins2<pred> and a vfov operation
-        # pitch = prop["pitch_logits"]
-        # roll = prop["roll_logits"]
-        # vfov = prop["vfov_logits"]
-        # img, _ = self.showHorizonLine(img, vfov, pitch, roll)
-        # vis_img = np.concatenate((anno_img, prop_img), axis=1)
-        # vis_img = vis_img.transpose(2, 0, 1)
-        # vis_name = "Left: GT bounding boxes;  Right: Predicted proposals"
-        # storage.put_image(vis_name, vis_img)
-        # break  # only visualize one image in a batch
+        storage = get_event_storage()
+        input = batched_inputs[0]
+        pitch_logits = proposals["pitch_logits"][0].detach().cpu().numpy().squeeze()
+        roll_logits = proposals["roll_logits"][0].detach().cpu().numpy().squeeze()
+        vfov_logits = proposals["vfov_logits"][0].detach().cpu().numpy().squeeze()
+        img = input["image"]
+        img = convert_image_to_rgb(img.permute(1, 2, 0), self.input_format)
+        pitch = bins2pitch(pitch_logits)
+        roll = bins2roll(roll_logits)
+        vfov = bins2vfov(vfov_logits)
+        gt_pitch = bins2pitch(input["logits"]["gt_pitch"])
+        gt_roll = bins2roll(input["logits"]["gt_roll"])
+        gt_vfov = bins2vfov(input["logits"]["gt_vfov"])
+        anno_img, _ = showHorizonLine(img, gt_vfov, gt_pitch, gt_roll)
+        prop_img, _ = showHorizonLine(img, vfov, pitch, roll)
+        vis_img = np.concatenate((anno_img, prop_img), axis=1)
+        vis_img = vis_img.transpose(2, 0, 1)
+        vis_name = "Left: GT Horizon;  Right: Predicted Horizon"
+        storage.put_image(vis_name, vis_img)
