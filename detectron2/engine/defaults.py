@@ -7,6 +7,36 @@ in training / testing. They will not work for everyone, but many users may find 
 The behavior of functions/classes in this file is subject to change,
 since they are meant to represent the "common default behavior" people need in their projects.
 """
+import torch
+from fvcore.nn.precise_bn import get_bn_modules
+from omegaconf import OmegaConf
+from torch.nn.parallel import DistributedDataParallel
+
+import detectron2.data.transforms as T
+from detectron2.checkpoint import DetectionCheckpointer
+from detectron2.config import CfgNode, LazyConfig
+from detectron2.data import (
+    CalibMapper,
+    MetadataCatalog,
+    build_detection_test_loader,
+    build_detection_train_loader,
+)
+from detectron2.evaluation import (
+    DatasetEvaluator,
+    Pano360Evaluator,
+    inference_on_dataset,
+    print_csv_format,
+    verify_results,
+)
+from detectron2.modeling import build_model
+from detectron2.solver import build_lr_scheduler, build_optimizer
+from detectron2.utils import comm
+from detectron2.utils.collect_env import collect_env_info
+from detectron2.utils.env import seed_all_rng
+from detectron2.utils.events import CommonMetricPrinter, JSONWriter, TensorboardXWriter
+from detectron2.utils.file_io import PathManager
+from detectron2.utils.logger import setup_logger
+
 import argparse
 import logging
 import os
@@ -15,38 +45,8 @@ import weakref
 from collections import OrderedDict
 from typing import Optional
 
-import torch
-from fvcore.nn.precise_bn import get_bn_modules
-from omegaconf import OmegaConf
-from torch.nn.parallel import DistributedDataParallel
-
-import detectron2.data.transforms as T
 from . import hooks
-from .train_loop import AMPTrainer
-from .train_loop import SimpleTrainer
-from .train_loop import TrainerBase
-from detectron2.checkpoint import DetectionCheckpointer
-from detectron2.config import CfgNode
-from detectron2.config import LazyConfig
-from detectron2.data import build_detection_test_loader
-from detectron2.data import build_detection_train_loader
-from detectron2.data import CalibMapper
-from detectron2.data import MetadataCatalog
-from detectron2.evaluation import DatasetEvaluator
-from detectron2.evaluation import inference_on_dataset
-from detectron2.evaluation import print_csv_format
-from detectron2.evaluation import verify_results
-from detectron2.modeling import build_model
-from detectron2.solver import build_lr_scheduler
-from detectron2.solver import build_optimizer
-from detectron2.utils import comm
-from detectron2.utils.collect_env import collect_env_info
-from detectron2.utils.env import seed_all_rng
-from detectron2.utils.events import CommonMetricPrinter
-from detectron2.utils.events import JSONWriter
-from detectron2.utils.events import TensorboardXWriter
-from detectron2.utils.file_io import PathManager
-from detectron2.utils.logger import setup_logger
+from .train_loop import AMPTrainer, SimpleTrainer, TrainerBase
 
 __all__ = [
     "create_ddp_model",
@@ -92,8 +92,8 @@ def default_argument_parser(epilog=None):
         argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
-        epilog=epilog
-        or f"""
+        epilog=epilog or
+        f"""
 Examples:
 
 Run on single machine:
@@ -187,8 +187,8 @@ def _highlight(code, filename):
     except ImportError:
         return code
 
-    from pygments.lexers import Python3Lexer, YamlLexer
     from pygments.formatters import Terminal256Formatter
+    from pygments.lexers import Python3Lexer, YamlLexer
 
     lexer = Python3Lexer() if filename.endswith(".py") else YamlLexer()
     code = pygments.highlight(code, lexer, Terminal256Formatter(style="monokai"))
@@ -822,6 +822,14 @@ class CalibTrainer(DefaultTrainer):
                 mapper=CalibMapper(cfg, is_train=False),
             )
         return build_detection_test_loader(cfg, dataset_name)
+
+    @classmethod
+    def build_evaluator(cls, cfg, dataset_name):
+        """
+        Returns:
+            DatasetEvaluator
+        """
+        return Pano360Evaluator()
 
     @classmethod
     def build_train_loader(cls, cfg):

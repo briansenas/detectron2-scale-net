@@ -2,8 +2,9 @@
 import torch
 from torch import nn
 
-from .evaluator import DatasetEvaluator
 from detectron2.utils import comm
+
+from .evaluator import DatasetEvaluator
 
 
 class Pano360Evaluator(DatasetEvaluator):
@@ -43,11 +44,11 @@ class Pano360Evaluator(DatasetEvaluator):
         self.pitch_loss = sum(x[1] for x in all_loss)
         self.roll_loss = sum(x[2] for x in all_loss)
         self.vfov_loss = sum(x[3] for x in all_loss)
-        total_loss = sum(sum(x) for x in all_loss)
+        self.total_loss = sum(sum(x) for x in all_loss)
         return {
-            "total_loss": total_loss,
-            "horizon_loss": self.horizon_loss,
-            "pitch_loss": self.pitch_loss,
-            "roll_loss": self.roll_loss,
-            "vfov_loss": self.vfov_loss,
+            "batchmean_total_loss": self.total_loss,
+            "batchmean_horizon_loss": self.horizon_loss,
+            "batchmean_pitch_loss": self.pitch_loss,
+            "batchmean_roll_loss": self.roll_loss,
+            "batchmean_vfov_loss": self.vfov_loss,
         }
