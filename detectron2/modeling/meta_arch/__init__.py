@@ -2,7 +2,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 from .build import build_model
 from .build import META_ARCH_REGISTRY
-from .camcnn import ClassifierRCNN
+from .camcnn import CameraRCNN
 from .dense_detector import DenseDetector
 from .fcos import FCOS
 from .panoptic_fpn import PanopticFPN

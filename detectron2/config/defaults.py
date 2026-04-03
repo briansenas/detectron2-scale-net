@@ -270,6 +270,23 @@ _C.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 512
 # Target fraction of RoI minibatch that is labeled foreground (i.e. class > 0)
 _C.MODEL.ROI_HEADS.POSITIVE_FRACTION = 0.25
 
+
+# ---------------------------------------------------------------------------- #
+# CAMERA HEADS options
+# ---------------------------------------------------------------------------- #
+
+_C.MODEL.CAMERA_HEAD = CN()
+_C.MODEL.CAMERA_HEAD.NAME = "CombinedCameraHeads"
+_C.MODEL.CAMERA_HEAD.IN_FEATURES = ["p2", "p3", "p4", "p5"]
+_C.MODEL.CAMERA_HEAD.NUM_CLASSES = 256
+_C.MODEL.CAMERA_HEAD.NUM_CONV = 0
+_C.MODEL.CAMERA_HEAD.NUM_FC = 2
+_C.MODEL.CAMERA_HEAD.POOLER_RESOLUTION = 14
+_C.MODEL.CAMERA_HEAD.POOLER_SAMPLING_RATIO = 0
+_C.MODEL.CAMERA_HEAD.POOLER_TYPE = "ROIAlignV2"
+_C.MODEL.CAMERA_HEAD.NUM_FC = 0
+_C.MODEL.CAMERA_HEAD.FC_DIM = 1024
+
 # Only used on test mode
 
 # Minimum score threshold (assuming scores in a [0, 1] range); a value chosen to

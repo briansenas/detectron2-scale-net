@@ -1,35 +1,27 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-import inspect
-import logging
-from typing import Dict
-from typing import List
-from typing import Optional
-from typing import Tuple
-
 import numpy as np
 import torch
 from torch import nn
 
-from ..backbone.resnet import BottleneckBlock
-from ..backbone.resnet import ResNet
+from detectron2.config import configurable
+from detectron2.layers import ShapeSpec, nonzero_tuple
+from detectron2.structures import Boxes, ImageList, Instances, pairwise_iou
+from detectron2.utils.events import get_event_storage
+from detectron2.utils.registry import Registry
+
+import inspect
+import logging
+from typing import Dict, List, Optional, Tuple
+
+from ..backbone.resnet import BottleneckBlock, ResNet
 from ..matcher import Matcher
 from ..poolers import ROIPooler
 from ..proposal_generator.proposal_utils import add_ground_truth_to_proposals
 from ..sampling import subsample_labels
-from .box_head import build_box_head
-from .box_head import FastRCNNConvFCHead
+from .box_head import FastRCNNConvFCHead, build_box_head
 from .fast_rcnn import FastRCNNOutputLayers
 from .keypoint_head import build_keypoint_head
 from .mask_head import build_mask_head
-from detectron2.config import configurable
-from detectron2.layers import nonzero_tuple
-from detectron2.layers import ShapeSpec
-from detectron2.structures import Boxes
-from detectron2.structures import ImageList
-from detectron2.structures import Instances
-from detectron2.structures import pairwise_iou
-from detectron2.utils.events import get_event_storage
-from detectron2.utils.registry import Registry
 
 ROI_HEADS_REGISTRY = Registry("ROI_HEADS")
 ROI_HEADS_REGISTRY.__doc__ = """
@@ -49,6 +41,14 @@ def build_roi_heads(cfg, input_shape):
     Build ROIHeads defined by `cfg.MODEL.ROI_HEADS.NAME`.
     """
     name = cfg.MODEL.ROI_HEADS.NAME
+    return ROI_HEADS_REGISTRY.get(name)(cfg, input_shape)
+
+
+def build_camera_head(cfg, input_shape):
+    """
+    Build ROIHeads defined by `cfg.MODEL.ROI_HEADS.NAME`.
+    """
+    name = cfg.MODEL.CAMERA_HEAD.NAME
     return ROI_HEADS_REGISTRY.get(name)(cfg, input_shape)
 
 
@@ -119,10 +119,10 @@ def select_proposals_with_visible_keypoints(
             dim=1,
         )  # #fg x 1 x 4
         kp_in_box = (
-            (xs >= proposal_boxes[:, :, 0])
-            & (xs <= proposal_boxes[:, :, 2])
-            & (ys >= proposal_boxes[:, :, 1])
-            & (ys <= proposal_boxes[:, :, 3])
+            (xs >= proposal_boxes[:, :, 0]) &
+            (xs <= proposal_boxes[:, :, 2]) &
+            (ys >= proposal_boxes[:, :, 1]) &
+            (ys <= proposal_boxes[:, :, 3])
         )
         selection = (kp_in_box & vis_mask).any(dim=1)
         selection_idxs = nonzero_tuple(selection)[0]
@@ -948,7 +948,7 @@ class StandardROIHeads(ROIHeads):
 
 
 @ROI_HEADS_REGISTRY.register()
-class ClassifierHead(ROIHeads):
+class CameraHead(ROIHeads):
     @configurable
     def __init__(
         self,
@@ -974,11 +974,11 @@ class ClassifierHead(ROIHeads):
     @classmethod
     def _init_classifier(cls, cfg, input_shape):
         # fmt: off
-        in_features       = cfg.MODEL.ROI_HEADS.IN_FEATURES
-        pooler_resolution = cfg.MODEL.ROI_BOX_HEAD.POOLER_RESOLUTION
+        in_features       = cfg.MODEL.CAMERA_HEAD.IN_FEATURES
+        pooler_resolution = cfg.MODEL.CAMERA_HEAD.POOLER_RESOLUTION
         pooler_scales     = tuple(1.0 / input_shape[k].stride for k in in_features)
-        sampling_ratio    = cfg.MODEL.ROI_BOX_HEAD.POOLER_SAMPLING_RATIO
-        pooler_type       = cfg.MODEL.ROI_BOX_HEAD.POOLER_TYPE
+        sampling_ratio    = cfg.MODEL.CAMERA_HEAD.POOLER_SAMPLING_RATIO
+        pooler_type       = cfg.MODEL.CAMERA_HEAD.POOLER_TYPE
         # fmt: on
         # If StandardROIHeads is applied on multiple feature maps (as in FPN),
         # then we share the same predictors and therefore the channel counts must be the same
@@ -1005,8 +1005,8 @@ class ClassifierHead(ROIHeads):
             ),
         )
         cls_score = nn.Linear(
-            cfg.MODEL.ROI_BOX_HEAD.FC_DIM,
-            cfg.MODEL.ROI_BOX_HEAD.NUM_CLASSES_H,
+            cfg.MODEL.CAMERA_HEAD.FC_DIM,
+            cfg.MODEL.CAMERA_HEAD.NUM_CLASSES,
         )
         nn.init.normal_(cls_score.weight, std=0.01)
         return {
@@ -1044,7 +1044,7 @@ class ClassifierHead(ROIHeads):
 
 
 @ROI_HEADS_REGISTRY.register()
-class CombinedClassifierHeads(ROIHeads):
+class CombinedCameraHeads(ROIHeads):
     """
     Combines a set of individual heads (for box prediction or masks) into a single
     head.
@@ -1053,10 +1053,10 @@ class CombinedClassifierHeads(ROIHeads):
     @configurable
     def __init__(
         self,
-        classifier_horizon: ClassifierHead,
-        classifier_pitch: ClassifierHead,
-        classifier_roll: ClassifierHead,
-        classifier_vfov: ClassifierHead,
+        classifier_horizon: CameraHead,
+        classifier_pitch: CameraHead,
+        classifier_roll: CameraHead,
+        classifier_vfov: CameraHead,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -1069,16 +1069,16 @@ class CombinedClassifierHeads(ROIHeads):
     def from_config(cls, cfg, input_shape):
         ret = super().from_config(cfg)
         ret.update(
-            dict(classifier_horizon=ClassifierHead(cfg=cfg, input_shape=input_shape)),
+            dict(classifier_horizon=CameraHead(cfg=cfg, input_shape=input_shape)),
         )
         ret.update(
-            dict(classifier_pitch=ClassifierHead(cfg=cfg, input_shape=input_shape)),
+            dict(classifier_pitch=CameraHead(cfg=cfg, input_shape=input_shape)),
         )
         ret.update(
-            dict(classifier_vfov=ClassifierHead(cfg=cfg, input_shape=input_shape)),
+            dict(classifier_vfov=CameraHead(cfg=cfg, input_shape=input_shape)),
         )
         ret.update(
-            dict(classifier_roll=ClassifierHead(cfg=cfg, input_shape=input_shape)),
+            dict(classifier_roll=CameraHead(cfg=cfg, input_shape=input_shape)),
         )
         return ret
 

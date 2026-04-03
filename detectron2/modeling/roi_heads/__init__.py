@@ -18,6 +18,7 @@ from .roi_heads import (
     Res5ROIHeads,
     StandardROIHeads,
     build_roi_heads,
+    build_camera_head,
     select_foreground_proposals,
 )
 from .cascade_rcnn import CascadeROIHeads

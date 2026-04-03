@@ -3,12 +3,7 @@ import torch
 from torch import nn
 
 from detectron2.config import configurable
-from detectron2.data.datasets.pano360 import (
-    bins2pitch,
-    bins2roll,
-    bins2vfov,
-    showHorizonLine,
-)
+from detectron2.data.datasets.pano360 import bins2pitch, bins2roll, bins2vfov, showHorizonLine
 from detectron2.data.detection_utils import convert_image_to_rgb
 from detectron2.layers import move_device_like
 from detectron2.structures import ImageList
@@ -18,14 +13,14 @@ from typing import Dict, List, Optional, Tuple
 
 from ..backbone import Backbone, build_backbone
 from ..proposal_generator import build_proposal_generator
-from ..roi_heads import build_roi_heads
+from ..roi_heads import build_camera_head
 from .build import META_ARCH_REGISTRY
 
-__all__ = ["ClassifierRCNN"]
+__all__ = ["CameraRCNN"]
 
 
 @META_ARCH_REGISTRY.register()
-class ClassifierRCNN(nn.Module):
+class CameraRCNN(nn.Module):
     """"""
 
     @configurable
@@ -85,7 +80,7 @@ class ClassifierRCNN(nn.Module):
                 cfg,
                 backbone.output_shape(),
             ),
-            "roi_heads": build_roi_heads(cfg, backbone.output_shape()),
+            "roi_heads": build_camera_head(cfg, backbone.output_shape()),
             "input_format": cfg.INPUT.FORMAT,
             "vis_period": cfg.VIS_PERIOD,
             "pixel_mean": cfg.MODEL.PIXEL_MEAN,
