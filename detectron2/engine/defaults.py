@@ -17,11 +17,13 @@ from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import CfgNode, LazyConfig
 from detectron2.data import (
     CalibMapper,
+    COCOScaleMapper,
     MetadataCatalog,
     build_detection_test_loader,
     build_detection_train_loader,
 )
 from detectron2.evaluation import (
+    COCOEvaluator,
     DatasetEvaluator,
     Pano360Evaluator,
     inference_on_dataset,
@@ -838,3 +840,35 @@ class CalibTrainer(DefaultTrainer):
             iterable
         """
         return build_detection_train_loader(cfg, mapper=CalibMapper(cfg, is_train=True))
+
+
+class COCOScaleTrainer(DefaultTrainer):
+    @classmethod
+    def build_test_loader(cls, cfg, dataset_name):
+        """
+        Returns:
+            iterable
+        """
+        if "COCOScale" in dataset_name:
+            return build_detection_test_loader(
+                cfg,
+                dataset_name,
+                mapper=COCOScaleMapper(cfg, is_train=False),
+            )
+        return build_detection_test_loader(cfg, dataset_name)
+
+    @classmethod
+    def build_evaluator(cls, cfg, dataset_name):
+        """
+        Returns:
+            DatasetEvaluator
+        """
+        return COCOEvaluator(dataset_name=dataset_name, output_dir=cfg.OUTPUT_DIR)
+
+    @classmethod
+    def build_train_loader(cls, cfg):
+        """
+        Returns:
+            iterable
+        """
+        return build_detection_train_loader(cfg, mapper=COCOScaleMapper(cfg, is_train=True))
