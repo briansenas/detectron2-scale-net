@@ -1,8 +1,9 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 import numpy as np
-from typing import Any, List, Tuple, Union
 import torch
 from torch.nn import functional as F
+
+from typing import Any, List, Tuple, Union
 
 
 class Keypoints:
@@ -25,7 +26,12 @@ class Keypoints:
                 The shape should be (N, K, 3) where N is the number of
                 instances, and K is the number of keypoints per instance.
         """
-        device = keypoints.device if isinstance(keypoints, torch.Tensor) else torch.device("cpu")
+        device = (
+            keypoints.device
+            if isinstance(keypoints, torch.Tensor)
+            else torch.device("cpu")
+        )
+        keypoints = np.array(keypoints) if isinstance(keypoints, list) else keypoints
         keypoints = torch.as_tensor(keypoints, dtype=torch.float32, device=device)
         assert keypoints.dim() == 3 and keypoints.shape[2] == 3, keypoints.shape
         self.tensor = keypoints
@@ -96,14 +102,16 @@ class Keypoints:
         assert all(isinstance(keypoints, Keypoints) for keypoints in keypoints_list)
 
         cat_kpts = type(keypoints_list[0])(
-            torch.cat([kpts.tensor for kpts in keypoints_list], dim=0)
+            torch.cat([kpts.tensor for kpts in keypoints_list], dim=0),
         )
         return cat_kpts
 
 
 # TODO make this nicer, this is a direct translation from C2 (but removing the inner loop)
 def _keypoints_to_heatmap(
-    keypoints: torch.Tensor, rois: torch.Tensor, heatmap_size: int
+    keypoints: torch.Tensor,
+    rois: torch.Tensor,
+    heatmap_size: int,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Encode keypoint locations into a target heatmap for use in SoftmaxWithLoss across space.
@@ -198,7 +206,12 @@ def heatmaps_to_keypoints(maps: torch.Tensor, rois: torch.Tensor) -> torch.Tenso
 
     for i in range(num_rois):
         outsize = (int(heights_ceil[i]), int(widths_ceil[i]))
-        roi_map = F.interpolate(maps[[i]], size=outsize, mode="bicubic", align_corners=False)
+        roi_map = F.interpolate(
+            maps[[i]],
+            size=outsize,
+            mode="bicubic",
+            align_corners=False,
+        )
 
         # Although semantically equivalent, `reshape` is used instead of `squeeze` due
         # to limitation during ONNX export of `squeeze` in scripting mode
@@ -211,7 +224,10 @@ def heatmaps_to_keypoints(maps: torch.Tensor, rois: torch.Tensor) -> torch.Tenso
         tmp_pool_resolution = (maps[i] - max_score).exp_()
         # Produce scores over the region H x W, but normalize with POOL_H x POOL_W,
         # so that the scores of objects of different absolute sizes will be more comparable
-        roi_map_scores = tmp_full_resolution / tmp_pool_resolution.sum((1, 2), keepdim=True)
+        roi_map_scores = tmp_full_resolution / tmp_pool_resolution.sum(
+            (1, 2),
+            keepdim=True,
+        )
 
         w = roi_map.shape[2]
         pos = roi_map.view(num_keypoints, -1).argmax(1)

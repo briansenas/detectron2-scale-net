@@ -178,6 +178,7 @@ class ClassifierRCNN(nn.Module):
             Otherwise, a list[Instances] containing raw network outputs.
         """
         assert not self.training
+        # NOTE: check whether that is a better way to map this elsewhere.
         for i, _ in enumerate(batched_inputs):
             x = batched_inputs[i]["logits"].copy()
             batched_inputs[i]["logits"] = dict(

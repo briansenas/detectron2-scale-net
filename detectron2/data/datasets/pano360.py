@@ -139,7 +139,7 @@ class CalibDataset:
         debug: bool = False,
     ):
         if logger is None:
-            self.logger = logging.getLogger("SUN360Horizon")
+            self.logger = logging.getLogger(__name__)
         else:
             self.logger = logger
 
@@ -154,13 +154,8 @@ class CalibDataset:
             self.data = self.data[:train_load]
         else:
             self.data = self.data[train_load:]
-        self.logger.info(
-            "===== %d for the %s set..."
-            % (len(self.data), "TRAIN" if train else "VAL"),
-        )
 
     def __getitem__(self, k):
-        # ["data/pano360/crops_dataset_cvpr_myDistWider/30723202112.jpg/30723202112.jpg-1.jpg"....
         with open(self.data[k][:-4] + ".json") as fhdl:
             data = json.load(fhdl)
         im_path = self.data[k]
