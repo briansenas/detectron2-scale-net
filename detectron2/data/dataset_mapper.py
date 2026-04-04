@@ -323,17 +323,17 @@ class COCOScaleMapper(DatasetMapper):
             y_person = 1.75
             vc = H / 2.0
             yc_list = []
-            for instance in dataset_dict["instances"]:
-                for bbox in instance["bbox"]:
-                    vt = H - bbox[1]
-                    vb = H - (bbox[1] + bbox[3])
-                    yc_single = (
-                        y_person *
-                        (v0 - vb) /
-                        (vt - vb) /
-                        (1.0 + (vc - v0) * (vc - vt) / f_pixels_yannick ** 2)
-                    )
-                    yc_list.append(yc_single)
+            for instance in dataset_dict["annotations"]:
+                bbox = instance["bbox"]
+                vt = H - bbox[1]
+                vb = H - (bbox[1] + bbox[3])
+                yc_single = (
+                    y_person *
+                    (v0 - vb) /
+                    (vt - vb) /
+                    (1.0 + (vc - v0) * (vc - vt) / f_pixels_yannick ** 2)
+                )
+                yc_list.append(yc_single)
             dataset_dict["yc_estCam"] = np.median(np.asarray(yc_list))
 
         image_shape = image.shape[:2]  # h, w
@@ -366,3 +366,91 @@ class COCOScaleMapper(DatasetMapper):
             self._transform_annotations(dataset_dict, transforms, image_shape)
 
         return dataset_dict
+
+
+class HybridDataMapper(DatasetMapper):
+    @configurable
+    def __init__(
+        self,
+        is_train: bool,
+        *,
+        calib_mapper: CalibMapper,
+        coco_scale_mapper: COCOScaleMapper,
+        augmentations: List[Union[T.Augmentation, T.Transform]],
+        image_format: str,
+        use_instance_mask: bool = False,
+        use_keypoint: bool = False,
+        instance_mask_format: str = "polygon",
+        keypoint_hflip_indices: Optional[np.ndarray] = None,
+        precomputed_proposal_topk: Optional[int] = None,
+        recompute_boxes: bool = False,
+    ):
+        if recompute_boxes:
+            assert use_instance_mask, "recompute_boxes requires instance masks"
+        # fmt: off
+        self.is_train               = is_train
+        self.augmentations          = T.AugmentationList(augmentations)
+        self.calib_mapper           = calib_mapper
+        self.coco_scale_mapper      = coco_scale_mapper
+        self.image_format           = image_format
+        self.use_instance_mask      = use_instance_mask
+        self.instance_mask_format   = instance_mask_format
+        self.use_keypoint           = use_keypoint
+        self.keypoint_hflip_indices = keypoint_hflip_indices
+        self.proposal_topk          = precomputed_proposal_topk
+        self.recompute_boxes        = recompute_boxes
+        # fmt: on
+        logger = logging.getLogger(__name__)
+        mode = "training" if is_train else "inference"
+        logger.info(f"[DatasetMapper] Augmentations used in {mode}: {augmentations}")
+
+    @classmethod
+    def from_config(cls, cfg, is_train: bool = True):
+        augs = utils.build_augmentation(cfg, is_train)
+        if cfg.INPUT.CROP.ENABLED and is_train:
+            augs.insert(0, T.RandomCrop(cfg.INPUT.CROP.TYPE, cfg.INPUT.CROP.SIZE))
+            recompute_boxes = cfg.MODEL.MASK_ON
+        else:
+            recompute_boxes = False
+
+        ret = {
+            "is_train": is_train,
+            "augmentations": augs,
+            "calib_mapper": CalibMapper(cfg, is_train),
+            "coco_scale_mapper": COCOScaleMapper(cfg, is_train),
+            "image_format": cfg.INPUT.FORMAT,
+            "use_instance_mask": cfg.MODEL.MASK_ON,
+            "instance_mask_format": cfg.INPUT.MASK_FORMAT,
+            "use_keypoint": cfg.MODEL.KEYPOINT_ON,
+            "recompute_boxes": recompute_boxes,
+        }
+
+        if cfg.MODEL.KEYPOINT_ON:
+            ret["keypoint_hflip_indices"] = utils.create_keypoint_hflip_indices(
+                cfg.DATASETS.TRAIN,
+            )
+
+        if cfg.MODEL.LOAD_PROPOSALS:
+            ret["precomputed_proposal_topk"] = (
+                cfg.DATASETS.PRECOMPUTED_PROPOSAL_TOPK_TRAIN
+                if is_train
+                else cfg.DATASETS.PRECOMPUTED_PROPOSAL_TOPK_TEST
+            )
+        return ret
+
+    def __call__(self, dataset_dict):
+        """
+        Args:
+            dataset_dict (dict): Metadata of one image, in Detectron2 Dataset format.
+
+        Returns:
+            dict: a format that builtin models in detectron2 accept
+        """
+        dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
+        coco_data = []
+        for sample in dataset_dict["coco_data"]:
+            coco_data.append(self.coco_scale_mapper(sample))
+        calib_data = []
+        for sample in dataset_dict["calib_data"]:
+            calib_data.append(self.calib_mapper(sample))
+        return {"coco_data": coco_data, "calib_data": calib_data}

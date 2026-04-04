@@ -17,4 +17,5 @@ from .defaults import (
     DefaultTrainer,
     CalibTrainer,
     COCOScaleTrainer,
+    HybridScaleTrainer,
 )

@@ -182,10 +182,12 @@ class CalibDataset:
             (horizon_gt, pitch_gt, roll_gt, vfov_gt),
         )
         return dict(
+            source="pano360",
             file_name=im_path,
             image_id=im_path,
             pitch=pitch,
             roll=roll,
+            annotations=[],
             horizon=horizon,
             vfov=vfov,
             focal_length_35mm_eq=focal_length_35mm_eq,

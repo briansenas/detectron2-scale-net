@@ -18,6 +18,7 @@ from detectron2.config import CfgNode, LazyConfig
 from detectron2.data import (
     CalibMapper,
     COCOScaleMapper,
+    HybridDataMapper,
     MetadataCatalog,
     build_detection_test_loader,
     build_detection_train_loader,
@@ -872,3 +873,23 @@ class COCOScaleTrainer(DefaultTrainer):
             iterable
         """
         return build_detection_train_loader(cfg, mapper=COCOScaleMapper(cfg, is_train=True))
+
+
+class HybridScaleTrainer(DefaultTrainer):
+    @classmethod
+    def build_test_loader(cls, cfg, dataset_name):
+        """
+        Returns:
+            iterable
+        """
+        return build_detection_test_loader(cfg, dataset_name, collate_fn=lambda x: x[0])
+
+    @classmethod
+    def build_train_loader(cls, cfg):
+        """
+        Returns:
+            iterablee
+        """
+        return build_detection_train_loader(
+            cfg, mapper=HybridDataMapper(cfg, is_train=True)
+        )
