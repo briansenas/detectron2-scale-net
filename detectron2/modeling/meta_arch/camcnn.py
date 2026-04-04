@@ -6,7 +6,7 @@ from detectron2.config import configurable
 from detectron2.data.datasets.pano360 import bins2pitch, bins2roll, bins2vfov, showHorizonLine
 from detectron2.data.detection_utils import convert_image_to_rgb
 from detectron2.layers import move_device_like
-from detectron2.structures import ImageList, Instances
+from detectron2.structures import Boxes, ImageList, Instances
 from detectron2.utils.events import get_event_storage
 
 from typing import Dict, List, Optional, Tuple
@@ -20,6 +20,34 @@ from .rcnn import GeneralizedRCNN
 __all__ = ["CameraRCNN", "GeneralizedCamRCNN"]
 
 
+def _move_logits_to_device(batched_inputs: List[Dict[str, torch.Tensor]], device):
+    # NOTE: check whether that is a better way to map this elsewhere.
+    if "logits" in batched_inputs[0]:
+        for i, _ in enumerate(batched_inputs):
+            x = batched_inputs[i]["logits"].copy()
+            batched_inputs[i]["logits"] = dict(
+                gt_horizon=x["gt_horizon"].to(device),
+                gt_pitch=x["gt_pitch"].to(device),
+                gt_roll=x["gt_roll"].to(device),
+                gt_vfov=x["gt_vfov"].to(device),
+            )
+    return batched_inputs
+
+
+def _add_whole_image_as_proposal(images, device):
+    # Set the whole image as a proposal region for camera head.
+    proposals = []
+    for image_size in images.image_sizes:
+        h, w = image_size
+        # one box covering the whole image
+        full_box = torch.tensor([[0.0, 0.0, w, h]], device=device)
+        inst = Instances(image_size)
+        inst.proposal_boxes = Boxes(full_box)
+        inst.objectness_logits = torch.ones(1, device=device)
+        proposals.append(inst)
+    return proposals
+
+
 @META_ARCH_REGISTRY.register()
 class CameraRCNN(nn.Module):
     """"""
@@ -30,7 +58,7 @@ class CameraRCNN(nn.Module):
         *,
         backbone: Backbone,
         proposal_generator: nn.Module,
-        roi_heads: nn.Module,
+        camera_heads: nn.Module,
         pixel_mean: Tuple[float],
         pixel_std: Tuple[float],
         input_format: Optional[str] = None,
@@ -40,7 +68,7 @@ class CameraRCNN(nn.Module):
         Args:
             backbone: a backbone module, must follow detectron2's backbone interface
             proposal_generator: a module that generates proposals using backbone features
-            roi_heads: a ROI head that performs per-region computation
+            camera_heads: a ROI head that performs per-region computation
             pixel_mean, pixel_std: list or tuple with #channels element, representing
                 the per-channel mean and std to be used to normalize the input image
             input_format: describe the meaning of channels of input. Needed by visualization
@@ -49,7 +77,7 @@ class CameraRCNN(nn.Module):
         super().__init__()
         self.backbone = backbone
         self.proposal_generator = proposal_generator
-        self.roi_heads = roi_heads
+        self.camera_heads = camera_heads
 
         self.input_format = input_format
         self.vis_period = vis_period
@@ -81,7 +109,7 @@ class CameraRCNN(nn.Module):
                 cfg,
                 backbone.output_shape(),
             ),
-            "roi_heads": build_camera_head(cfg, backbone.output_shape()),
+            "camera_heads": build_camera_head(cfg, backbone.output_shape()),
             "input_format": cfg.INPUT.FORMAT,
             "vis_period": cfg.VIS_PERIOD,
             "pixel_mean": cfg.MODEL.PIXEL_MEAN,
@@ -122,17 +150,10 @@ class CameraRCNN(nn.Module):
         gt_instances = None
 
         features = self.backbone(images.tensor)
-        if self.proposal_generator is not None:
-            proposals, proposal_losses = self.proposal_generator(
-                images,
-                features,
-                gt_instances,
-            )
-        else:
-            assert "proposals" in batched_inputs[0]
-            proposals = [x["proposals"].to(self.device) for x in batched_inputs]
-            proposal_losses = {}
+        proposals = _add_whole_image_as_proposal(images, self.device)
+        proposal_losses = {}
 
+        # Inyect GT manually to avoid other detectron2 previous logic
         if "logits" in batched_inputs[0]:
             gt_instances = [
                 dict(
@@ -143,7 +164,7 @@ class CameraRCNN(nn.Module):
                 )
                 for x in batched_inputs
             ]
-        predictions, detector_losses = self.roi_heads(
+        predictions, detector_losses = self.camera_heads(
             images,
             features,
             proposals,
@@ -174,24 +195,11 @@ class CameraRCNN(nn.Module):
             Otherwise, a list[Instances] containing raw network outputs.
         """
         assert not self.training
-        # NOTE: check whether that is a better way to map this elsewhere.
-        for i, _ in enumerate(batched_inputs):
-            x = batched_inputs[i]["logits"].copy()
-            batched_inputs[i]["logits"] = dict(
-                gt_horizon=x["gt_horizon"].to(self.device),
-                gt_pitch=x["gt_pitch"].to(self.device),
-                gt_roll=x["gt_roll"].to(self.device),
-                gt_vfov=x["gt_vfov"].to(self.device),
-            )
+        batched_inputs = _move_logits_to_device(batched_inputs, self.device)
         images = self.preprocess_image(batched_inputs)
         features = self.backbone(images.tensor)
-        if self.proposal_generator is not None:
-            proposals, _ = self.proposal_generator(images, features, None)
-        else:
-            assert "proposals" in batched_inputs[0]
-            proposals = [x["proposals"].to(self.device) for x in batched_inputs]
-
-        results, _ = self.roi_heads(images, features, proposals, None)
+        proposals = _add_whole_image_as_proposal(images, self.device)
+        results, _ = self.camera_heads(images, features, proposals, None)
         return results
 
     def visualize_training(self, batched_inputs, proposals):
@@ -302,8 +310,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         gt_instances = None
 
         features = self.backbone(images.tensor)
-        assert "proposals" in batched_inputs[0]
-        proposals = [x["proposals"].to(self.device) for x in batched_inputs]
+        proposals = _add_whole_image_as_proposal(images, self.device)
         proposal_losses = {}
 
         if "logits" in batched_inputs[0]:
@@ -338,6 +345,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         for input in batched_inputs:
             dt_inputs += input["coco_data"]
             cam_inputs += input["calib_data"]
+        cam_inputs = _move_logits_to_device(cam_inputs, self.device)
         return dt_inputs, cam_inputs
 
     def forward(self, batched_inputs: List[Dict[str, torch.Tensor]]):
@@ -353,7 +361,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         """
         if not self.training:
             return self.inference(batched_inputs)
-
         dt_inputs, cam_inputs = self._parse_dt_cam_inputs(batched_inputs)
         dt_losses = {}
         cam_losses = {}
@@ -363,64 +370,38 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             cam_losses = self._forward_camrcnn(cam_inputs)
         return {**dt_losses, **cam_losses}
 
-    def _inference_generalized_rcnn(
-        self,
-        batched_inputs: List[Dict[str, torch.Tensor]],
-        detected_instances: Optional[List[Instances]] = None,
-        do_postprocess: bool = True,
-    ):
-        return super().inference(
-            batched_inputs,
-            detected_instances,
-            do_postprocess,
-        )
-
     def inference(
         self,
         batched_inputs: List[Dict[str, torch.Tensor]],
         detected_instances: Optional[List[Instances]] = None,
         do_postprocess: bool = True,
     ):
-        dt_inputs, cam_inputs = self._parse_dt_cam_inputs(batched_inputs)
-        dt_results = []
-        cam_results = []
-        if dt_inputs:
-            dt_results = self._inference_generalized_rcnn(batched_inputs, detected_instances, do_postprocess)
-        if cam_inputs:
-            cam_results = self._inference_camrcnn(batched_inputs)
-        return dt_results + cam_results
-
-    def _inference_camrcnn(
-        self,
-        batched_inputs: List[Dict[str, torch.Tensor]],
-    ):
-        """
-        Run inference on the given inputs.
-
-        Args:
-            batched_inputs (list[dict]): same as in :meth:`forward`
-
-        Returns:
-            When do_postprocess=True, same as in :meth:`forward`.
-            Otherwise, a list[Instances] containing raw network outputs.
-        """
         assert not self.training
-        # NOTE: check whether that is a better way to map this elsewhere.
-        for i, _ in enumerate(batched_inputs):
-            x = batched_inputs[i]["logits"].copy()
-            batched_inputs[i]["logits"] = dict(
-                gt_horizon=x["gt_horizon"].to(self.device),
-                gt_pitch=x["gt_pitch"].to(self.device),
-                gt_roll=x["gt_roll"].to(self.device),
-                gt_vfov=x["gt_vfov"].to(self.device),
-            )
+        if "coco_data" in batched_inputs[0]:
+            dt_inputs, cam_inputs = self._parse_dt_cam_inputs(batched_inputs)
+            batched_inputs = dt_inputs + cam_inputs
         images = self.preprocess_image(batched_inputs)
         features = self.backbone(images.tensor)
-        assert "proposals" in batched_inputs[0]
-        proposals = [x["proposals"].to(self.device) for x in batched_inputs]
 
-        results, _ = self.camera_heads(images, features, proposals, None)
-        return results
+        if detected_instances is None:
+            if self.proposal_generator is not None:
+                proposals, _ = self.proposal_generator(images, features, None)
+            else:
+                assert "proposals" in batched_inputs[0]
+                proposals = [x["proposals"].to(self.device) for x in batched_inputs]
+
+            results, _ = self.roi_heads(images, features, proposals, None)
+        else:
+            detected_instances = [x.to(self.device) for x in detected_instances]
+            results = self.roi_heads.forward_with_given_boxes(features, detected_instances)
+
+        if do_postprocess:
+            assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
+            results = GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
+
+        proposals = _add_whole_image_as_proposal(images, self.device)
+        cam_results, _ = self.camera_heads(images, features, proposals, None)
+        return {**results, **cam_results}
 
     def visualize_training_camrcnn(self, batched_inputs, proposals):
         """
@@ -447,9 +428,9 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             pitch = bins2pitch(pitch_logits)
             roll = bins2roll(roll_logits)
             vfov = bins2vfov(vfov_logits)
-            gt_pitch = bins2pitch(input["logits"]["gt_pitch"])
-            gt_roll = bins2roll(input["logits"]["gt_roll"])
-            gt_vfov = bins2vfov(input["logits"]["gt_vfov"])
+            gt_pitch = bins2pitch(input["logits"]["gt_pitch"].detach().cpu().numpy().squeeze())
+            gt_roll = bins2roll(input["logits"]["gt_roll"].detach().cpu().numpy().squeeze())
+            gt_vfov = bins2vfov(input["logits"]["gt_vfov"].detach().cpu().numpy().squeeze())
             anno_img, _ = showHorizonLine(img, gt_vfov, gt_pitch, gt_roll)
             prop_img, _ = showHorizonLine(img, vfov, pitch, roll)
             vis_img = np.concatenate((anno_img, prop_img), axis=1)
