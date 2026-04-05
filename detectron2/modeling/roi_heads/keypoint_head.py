@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -275,6 +276,49 @@ class KRCNNConvDeconvUpsampleHead(BaseKeypointRCNNHead, nn.Sequential):
 
 @ROI_KEYPOINT_HEAD_REGISTRY.register()
 class KRCNNConvDeconvUpsampleHeadHeightPred(KRCNNConvDeconvUpsampleHead):
+    @configurable
+    def __init__(self, input_shape, *, height_mean, height_std, height_loss_weight, reduce_method, human_bins, num_keypoints, conv_dims, **kwargs):
+        super().__init__(input_shape=input_shape, num_keypoints=num_keypoints, conv_dims=conv_dims, **kwargs)
+        self.height_mean = height_mean
+        self.height_std = height_std
+        self.height_loss_weight = height_loss_weight
+        self.reduce_method = reduce_method
+        # Register as buffer so it moves with .to(device)
+        self.register_buffer("human_bins", human_bins)
+
+    def human_prior(self, tensor):
+        return 1. / np.sqrt(2. * np.pi * (self.height_std**2)) * torch.exp(-(tensor - self.height_mean)**2 / (2. * self.height_std**2))
+
+    def person_h_logits_to_person_h_list(self, cls_logits):
+        return prob_to_est(cls_logits, self.human_bins, self.reduce_method)  # [N_bbox,]
+
+    def person_h_list_loss(self, all_person_hs, num_instances):
+        prob_all_person_hs = self.human_prior(all_person_hs)
+        prob_all_person_h_list = prob_all_person_hs.split(num_instances)
+        loss_all_person_h = -torch.mean(
+            torch.stack(
+                [
+                    torch.mean(prob_all_person_h) if prob_all_person_h.numel(
+                    ) > 1 else torch.zeros(1)[0].to(all_person_hs.device)
+                    for prob_all_person_h in prob_all_person_h_list
+                ]
+            )
+        )
+        loss_all_person_h = loss_all_person_h * self.height_loss_weight
+        return loss_all_person_h
+
+    @classmethod
+    def from_config(cls, cfg, input_shape):
+        ret = super().from_config(cfg, input_shape)
+        ret["height_mean"] = cfg.MODEL.HEIGHT_MEAN
+        ret["height_std"] = cfg.MODEL.HEIGHT_STD
+        ret["height_loss_weight"] = cfg.MODEL.HEIGHT_HEAD.LOSS_WEIGHT
+        ret["reduce_method"] = cfg.MODEL.HEIGHT_HEAD.REDUCE_METHOD
+        human_height_intervals = cfg.MODEL.HEIGHT_HEAD.HUMAN_BINS
+        ret["human_bins"] = torch.linspace(human_height_intervals[0],
+                                           human_height_intervals[1], cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES)
+        return ret
+
     def forward(self, layers, instances: List[Instances]):
         """
         Args:
@@ -300,3 +344,27 @@ class KRCNNConvDeconvUpsampleHeadHeightPred(KRCNNConvDeconvUpsampleHead):
         else:
             keypoint_rcnn_inference(layers, instances)
             return instances
+
+
+def softmax_with_bins(input, bins):
+    # input: [N, D], bins: [D]
+    # return: [N]
+    return (nn.functional.softmax(input, dim=1) * bins).sum(dim=1)  # sum is reducing dims; [N]
+
+
+def argmax_with_bins(input, bins):
+    # input: [N, D], bins: [D]
+    # return: [N]
+    idxx = torch.argmax(input, dim=1)
+    est_batch = bins[idxx]
+    return est_batch
+
+
+def prob_to_est(input, bins, reduce_method='softmax', debug=False):
+    if reduce_method == 'softmax':
+        return softmax_with_bins(input, bins)
+    elif reduce_method == 'argmax':
+        return argmax_with_bins(input, bins)
+    else:
+        msg = "The reduce_method should be softmax or argmax"
+        raise ValueError(msg)

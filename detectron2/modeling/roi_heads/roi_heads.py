@@ -18,7 +18,12 @@ from ..matcher import Matcher
 from ..poolers import ROIPooler
 from ..proposal_generator.proposal_utils import add_ground_truth_to_proposals
 from ..sampling import subsample_labels
-from .box_head import FastRCNNConvFCHead, FastRCNNConvFCHeadCamera, build_box_head
+from .box_head import (
+    FastRCNNConvFCHead,
+    FastRCNNConvFCHeadCamera,
+    FastRCNNConvFCHeadHeight,
+    build_box_head,
+)
 from .fast_rcnn import FastRCNNOutputLayers
 from .keypoint_head import build_keypoint_head
 from .mask_head import build_mask_head
@@ -945,6 +950,184 @@ class StandardROIHeads(ROIHeads):
         else:
             features = {f: features[f] for f in self.keypoint_in_features}
         return self.keypoint_head(features, instances)
+
+
+@ROI_HEADS_REGISTRY.register()
+class HeightStandardROIHeads(StandardROIHeads):
+    @configurable
+    def __init__(
+        self,
+        *,
+        box_in_features: List[str],
+        box_pooler: ROIPooler,
+        box_head: nn.Module,
+        box_predictor: nn.Module,
+        mask_in_features: Optional[List[str]] = None,
+        mask_pooler: Optional[ROIPooler] = None,
+        mask_head: Optional[nn.Module] = None,
+        keypoint_in_features: Optional[List[str]] = None,
+        keypoint_pooler: Optional[ROIPooler] = None,
+        keypoint_head: Optional[nn.Module] = None,
+        train_on_pred_boxes: bool = False,
+        height_predictor: Optional[nn.Module] = None,
+        height_cls_score: Optional[nn.Module] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            box_in_features=box_in_features,
+            box_pooler=box_pooler,
+            box_head=box_head,
+            box_predictor=box_predictor,
+            mask_in_features=mask_in_features,
+            mask_pooler=mask_pooler,
+            mask_head=mask_head,
+            keypoint_in_features=keypoint_in_features,
+            keypoint_pooler=keypoint_pooler,
+            keypoint_head=keypoint_head,
+            train_on_pred_boxes=train_on_pred_boxes,
+            **kwargs,
+        )
+        self.height_predictor = height_predictor
+        self.height_cls_score = height_cls_score
+
+    @classmethod
+    def _init_keypoint_head(cls, cfg, input_shape):
+        if not cfg.MODEL.KEYPOINT_ON:
+            return {}
+        # fmt: off
+        in_features       = cfg.MODEL.ROI_HEADS.IN_FEATURES
+        pooler_resolution = cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_RESOLUTION
+        pooler_scales     = tuple(1.0 / input_shape[k].stride for k in in_features)  # noqa
+        sampling_ratio    = cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_SAMPLING_RATIO
+        pooler_type       = cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_TYPE
+        # fmt: on
+
+        in_channels = [input_shape[f].channels for f in in_features][0]
+
+        ret = {"keypoint_in_features": in_features}
+        ret["keypoint_pooler"] = (
+            ROIPooler(
+                output_size=pooler_resolution,
+                scales=pooler_scales,
+                sampling_ratio=sampling_ratio,
+                pooler_type=pooler_type,
+            )
+            if pooler_type
+            else None
+        )
+        if pooler_type:
+            shape = ShapeSpec(
+                channels=in_channels,
+                width=pooler_resolution,
+                height=pooler_resolution,
+            )
+        else:
+            shape = {f: input_shape[f] for f in in_features}
+
+        ret["keypoint_head"] = build_keypoint_head(cfg, shape)
+        # If we set the number of Conv3x to 0 and FC-2
+        # We will have the same predictor as Jerry
+        height_predictor = FastRCNNConvFCHeadHeight(
+            cfg,
+            ShapeSpec(
+                channels=cfg.MODEL.ROI_KEYPOINT_HEAD.NUM_KEYPOINTS,
+                width=cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_RESOLUTION * 4.0,
+                height=cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_RESOLUTION * 4.0,
+            )
+        )
+        height_cls_score = nn.Linear(
+            cfg.MODEL.HEIGHT_HEAD.FC_DIM,
+            cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES,
+        )
+        nn.init.normal_(height_cls_score.weight, std=0.01)
+        ret["height_predictor"] = height_predictor
+        ret["height_cls_score"] = height_cls_score
+        return ret
+
+    def forward(
+        self,
+        images: ImageList,
+        features: Dict[str, torch.Tensor],
+        proposals: List[Instances],
+        targets: Optional[List[Instances]] = None,
+    ) -> Tuple[List[Instances], Dict[str, torch.Tensor]]:
+        """
+        See :class:`ROIHeads.forward`.
+        """
+        del images
+        if self.training:
+            assert targets, "'targets' argument is required during training"
+            proposals = self.label_and_sample_proposals(proposals, targets)
+        del targets
+
+        if self.training:
+            losses = self._forward_box(features, proposals)
+            # Usually the original proposals used by the box head are used by the mask, keypoint
+            # heads. But when `self.train_on_pred_boxes is True`, proposals will contain boxes
+            # predicted by the box head.
+            losses.update(self._forward_mask(features, proposals))
+            proposals, keypoint_losses = self._forward_keypoint(features, proposals)
+            losses.update(keypoint_losses)
+            return proposals, losses
+        else:
+            pred_instances = self._forward_box(features, proposals)
+            # During inference cascaded prediction is used: the mask and keypoints heads are only
+            # applied to the top scoring box detections.
+            pred_instances = self.forward_with_given_boxes(features, pred_instances)
+            return pred_instances, {}
+
+    def _forward_keypoint(
+        self,
+        features: Dict[str, torch.Tensor],
+        instances: List[Instances],
+    ):
+        """
+        Forward logic of the keypoint prediction branch.
+
+        Args:
+            features (dict[str, Tensor]): mapping from feature map names to tensor.
+                Same as in :meth:`ROIHeads.forward`.
+            instances (list[Instances]): the per-image instances to train/predict keypoints.
+                In training, they can be the proposals.
+                In inference, they can be the boxes predicted by R-CNN box head.
+
+        Returns:
+            In training, a dict of losses.
+            In inference, update `instances` with new fields "pred_keypoints" and return it.
+        """
+        if not self.keypoint_on:
+            return {} if self.training else instances
+
+        if self.training:
+            # head is only trained on positive proposals with >=1 visible keypoints.
+            instances, _ = select_foreground_proposals(instances, self.num_classes)
+            instances = select_proposals_with_visible_keypoints(instances)
+
+        if self.keypoint_pooler is not None:
+            features = [features[f] for f in self.keypoint_in_features]
+            boxes = [
+                x.proposal_boxes if self.training else x.pred_boxes for x in instances
+            ]
+            features = self.keypoint_pooler(features, boxes)
+        else:
+            features = {f: features[f] for f in self.keypoint_in_features}
+        layers = self.keypoint_head.layers(features)
+        num_instances_per_image = [len(i) for i in instances]
+        height_features = self.height_predictor(layers)
+        height_cls_logits = self.height_cls_score(height_features)
+        all_person_hs = self.keypoint_head.person_h_logits_to_person_h_list(height_cls_logits)
+        person_h_list = all_person_hs.split(num_instances_per_image)
+        height_cls_logits_list = height_cls_logits.split(num_instances_per_image, dim=0)
+        for cls_logits, height, pred_instances in zip(height_cls_logits_list, person_h_list, instances):
+            pred_instances.pred_height_cls_logits = cls_logits
+            pred_instances.pred_height = height
+        if self.training:
+            height_loss = self.keypoint_head.person_h_list_loss(all_person_hs, num_instances_per_image)
+            keypoint_losses = self.keypoint_head(layers, instances)
+            return instances, {**keypoint_losses, "height_loss": height_loss}
+        else:
+            instances = self.keypoint_head(layers, instances)
+            return instances
 
 
 @ROI_HEADS_REGISTRY.register()

@@ -134,3 +134,20 @@ class FastRCNNConvFCHeadCamera(FastRCNNConvFCHead):
             "fc_dims": [fc_dim] * num_fc,
             "conv_norm": cfg.MODEL.CAMERA_HEAD.NORM,
         }
+
+
+@ROI_BOX_HEAD_REGISTRY.register()
+class FastRCNNConvFCHeadHeight(FastRCNNConvFCHead):
+    """Copy of FastRCNNConvFCHead that uses different _C variables"""
+    @classmethod
+    def from_config(cls, cfg, input_shape):
+        num_conv = cfg.MODEL.HEIGHT_HEAD.NUM_CONV
+        conv_dim = cfg.MODEL.HEIGHT_HEAD.CONV_DIM
+        num_fc = cfg.MODEL.HEIGHT_HEAD.NUM_FC
+        fc_dim = cfg.MODEL.HEIGHT_HEAD.FC_DIM
+        return {
+            "input_shape": input_shape,
+            "conv_dims": [conv_dim] * num_conv,
+            "fc_dims": [fc_dim] * num_fc,
+            "conv_norm": cfg.MODEL.HEIGHT_HEAD.NORM,
+        }

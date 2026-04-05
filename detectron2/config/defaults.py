@@ -45,6 +45,9 @@ _C.MODEL.PIXEL_MEAN = [103.530, 116.280, 123.675]
 # Otherwise, you can use [57.375, 57.120, 58.395] (ImageNet std)
 _C.MODEL.PIXEL_STD = [1.0, 1.0, 1.0]
 
+_C.MODEL.HEIGHT_MEAN = 1.75
+_C.MODEL.HEIGHT_STD = 0.2
+
 
 # -----------------------------------------------------------------------------
 # INPUT
@@ -280,14 +283,28 @@ _C.MODEL.CAMERA_HEAD.NAME = "CombinedCameraHeads"
 _C.MODEL.CAMERA_HEAD.IN_FEATURES = ["p2", "p3", "p4", "p5"]
 _C.MODEL.CAMERA_HEAD.NUM_CLASSES = 256
 _C.MODEL.CAMERA_HEAD.NUM_CONV = 0
-_C.MODEL.CAMERA_HEAD.NUM_FC = 2
-_C.MODEL.CAMERA_HEAD.POOLER_RESOLUTION = 14
+_C.MODEL.CAMERA_HEAD.NUM_FC = 1
+_C.MODEL.CAMERA_HEAD.POOLER_RESOLUTION = 7
 _C.MODEL.CAMERA_HEAD.POOLER_SAMPLING_RATIO = 0
 _C.MODEL.CAMERA_HEAD.POOLER_TYPE = "ROIAlignV2"
-_C.MODEL.CAMERA_HEAD.FC_DIM = 1024
+_C.MODEL.CAMERA_HEAD.FC_DIM = 256
 _C.MODEL.CAMERA_HEAD.CONV_DIM = 256
 _C.MODEL.CAMERA_HEAD.NORM = ""
 
+# ---------------------------------------------------------------------------- #
+# HEIGHT HEADS options
+# ---------------------------------------------------------------------------- #
+
+_C.MODEL.HEIGHT_HEAD = CN()
+_C.MODEL.HEIGHT_HEAD.NUM_CONV = 1
+_C.MODEL.HEIGHT_HEAD.CONV_DIM = 256
+_C.MODEL.HEIGHT_HEAD.NUM_FC = 1
+_C.MODEL.HEIGHT_HEAD.FC_DIM = 256
+_C.MODEL.HEIGHT_HEAD.NORM = ""
+_C.MODEL.HEIGHT_HEAD.NUM_CLASSES = 256
+_C.MODEL.HEIGHT_HEAD.LOSS_WEIGHT = 0.05  # alpha 2
+_C.MODEL.HEIGHT_HEAD.REDUCE_METHOD = "softmax"
+_C.MODEL.HEIGHT_HEAD.HUMAN_BINS = (1., 2.0)
 # Only used on test mode
 
 # Minimum score threshold (assuming scores in a [0, 1] range); a value chosen to
