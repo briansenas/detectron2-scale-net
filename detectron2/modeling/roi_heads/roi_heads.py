@@ -18,7 +18,7 @@ from ..matcher import Matcher
 from ..poolers import ROIPooler
 from ..proposal_generator.proposal_utils import add_ground_truth_to_proposals
 from ..sampling import subsample_labels
-from .box_head import FastRCNNConvFCHead, build_box_head
+from .box_head import FastRCNNConvFCHead, FastRCNNConvFCHeadCamera, build_box_head
 from .fast_rcnn import FastRCNNOutputLayers
 from .keypoint_head import build_keypoint_head
 from .mask_head import build_mask_head
@@ -996,7 +996,7 @@ class CameraHead(ROIHeads):
 
         # If we set the number of Conv3x to 0 and FC-2
         # We will have the same predictor as Jerry
-        predictor = FastRCNNConvFCHead(
+        predictor = FastRCNNConvFCHeadCamera(
             cfg,
             ShapeSpec(
                 channels=in_channels,

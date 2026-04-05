@@ -1,6 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 import numpy as np
-from typing import List
 import fvcore.nn.weight_init as weight_init
 import torch
 from torch import nn
@@ -8,6 +7,8 @@ from torch import nn
 from detectron2.config import configurable
 from detectron2.layers import Conv2d, ShapeSpec, get_norm
 from detectron2.utils.registry import Registry
+
+from typing import List
 
 __all__ = ["FastRCNNConvFCHead", "build_box_head", "ROI_BOX_HEAD_REGISTRY"]
 
@@ -116,3 +117,20 @@ def build_box_head(cfg, input_shape):
     """
     name = cfg.MODEL.ROI_BOX_HEAD.NAME
     return ROI_BOX_HEAD_REGISTRY.get(name)(cfg, input_shape)
+
+
+@ROI_BOX_HEAD_REGISTRY.register()
+class FastRCNNConvFCHeadCamera(FastRCNNConvFCHead):
+    """Copy of FastRCNNConvFCHead that uses different _C variables"""
+    @classmethod
+    def from_config(cls, cfg, input_shape):
+        num_conv = cfg.MODEL.CAMERA_HEAD.NUM_CONV
+        conv_dim = cfg.MODEL.CAMERA_HEAD.CONV_DIM
+        num_fc = cfg.MODEL.CAMERA_HEAD.NUM_FC
+        fc_dim = cfg.MODEL.CAMERA_HEAD.FC_DIM
+        return {
+            "input_shape": input_shape,
+            "conv_dims": [conv_dim] * num_conv,
+            "fc_dims": [fc_dim] * num_fc,
+            "conv_norm": cfg.MODEL.CAMERA_HEAD.NORM,
+        }

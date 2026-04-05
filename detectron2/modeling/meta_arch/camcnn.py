@@ -20,6 +20,29 @@ from .rcnn import GeneralizedRCNN
 __all__ = ["CameraRCNN", "GeneralizedCamRCNN"]
 
 
+def accu_model_batch(dataset_dict: dict):
+    yc_est, vb, y_person, v0, vc, f_pixels_yannick = (
+        dataset_dict["yc_est"],
+        dataset_dict["vb"],
+        dataset_dict["y_person"],
+        dataset_dict["v0"],
+        dataset_dict["vc"],
+        dataset_dict["f_pixels_yannick"],
+    )
+    if 'pitch_est' in dataset_dict:
+        theta_yannick = dataset_dict['pitch_est']
+    else:
+        theta_yannick = torch.atan((vc - v0) / f_pixels_yannick)
+    z = - (f_pixels_yannick * yc_est) / (f_pixels_yannick *
+                                         torch.sin(theta_yannick) - (vc - vb) * torch.cos(theta_yannick) + 1e-10)
+    vt_camEst = ((f_pixels_yannick * torch.cos(theta_yannick) + vc * torch.sin(theta_yannick)) * y_person +
+                 (-f_pixels_yannick * torch.sin(theta_yannick) + vc * torch.cos(theta_yannick)) * z +
+                 -f_pixels_yannick * yc_est) \
+        / (y_person * torch.sin(theta_yannick) + z * torch.cos(theta_yannick) + 1e-10)
+    negative_z = None
+    return vt_camEst, z, negative_z
+
+
 def _move_logits_to_device(batched_inputs: List[Dict[str, torch.Tensor]], device):
     # NOTE: check whether that is a better way to map this elsewhere.
     if "logits" in batched_inputs[0]:

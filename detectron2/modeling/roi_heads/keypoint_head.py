@@ -1,5 +1,4 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-from typing import List
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -9,6 +8,8 @@ from detectron2.layers import Conv2d, ConvTranspose2d, cat, interpolate
 from detectron2.structures import Instances, heatmaps_to_keypoints
 from detectron2.utils.events import get_event_storage
 from detectron2.utils.registry import Registry
+
+from typing import List
 
 _TOTAL_SKIPPED = 0
 
@@ -197,8 +198,8 @@ class BaseKeypointRCNNHead(nn.Module):
                 None if self.loss_normalizer == "visible" else num_images * self.loss_normalizer
             )
             return {
-                "loss_keypoint": keypoint_rcnn_loss(x, instances, normalizer=normalizer)
-                * self.loss_weight
+                "loss_keypoint": keypoint_rcnn_loss(x, instances, normalizer=normalizer) *
+                self.loss_weight
             }
         else:
             keypoint_rcnn_inference(x, instances)
@@ -270,3 +271,32 @@ class KRCNNConvDeconvUpsampleHead(BaseKeypointRCNNHead, nn.Sequential):
             x = layer(x)
         x = interpolate(x, scale_factor=self.up_scale, mode="bilinear", align_corners=False)
         return x
+
+
+@ROI_KEYPOINT_HEAD_REGISTRY.register()
+class KRCNNConvDeconvUpsampleHeadHeightPred(KRCNNConvDeconvUpsampleHead):
+    def forward(self, layers, instances: List[Instances]):
+        """
+        Args:
+            layers: Given self.layers(x) where x is input 4D region feature(s) provided by :class:`ROIHeads`.
+            instances (list[Instances]): contains the boxes & labels corresponding
+                to the input features.
+                Exact format is up to its caller to decide.
+                Typically, this is the foreground instances in training, with
+                "proposal_boxes" field and other gt annotations.
+                In inference, it contains boxes that are already predicted.
+        Returns:
+            A dict of losses if in training. The predicted "instances" if in inference.
+        """
+        if self.training:
+            num_images = len(instances)
+            normalizer = (
+                None if self.loss_normalizer == "visible" else num_images * self.loss_normalizer
+            )
+            return {
+                "loss_keypoint": keypoint_rcnn_loss(layers, instances, normalizer=normalizer) *
+                self.loss_weight
+            }
+        else:
+            keypoint_rcnn_inference(layers, instances)
+            return instances
