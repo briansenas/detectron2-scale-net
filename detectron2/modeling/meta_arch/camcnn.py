@@ -289,7 +289,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             "pixel_std": cfg.MODEL.PIXEL_STD,
         }
 
-    def _forward_generalized_rcnn(self, batched_inputs: List[Dict[str, torch.Tensor]]):
+    def _forward_generalized_rcnn(self, batched_inputs: List[Dict[str, torch.Tensor]], images, features):
         """
         Args:
             Same as in :class:`GeneralizedRCNN.forward`
@@ -300,18 +300,32 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 The dict contains one key "proposals" whose value is a
                 :class:`Instances` with keys "proposal_boxes" and "objectness_logits".
         """
-        return super().forward(batched_inputs)
+        # Check if tensors share memory
+        if "instances" in batched_inputs[0]:
+            gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+        else:
+            gt_instances = None
 
-    def _forward_camrcnn(self, batched_inputs: List[Dict[str, torch.Tensor]]):
-        if not self.training:
-            return self.inference(batched_inputs)
+        if self.proposal_generator is not None:
+            proposals, proposal_losses = self.proposal_generator(images, features, gt_instances)
+        else:
+            assert "proposals" in batched_inputs[0]
+            proposals = [x["proposals"].to(self.device) for x in batched_inputs]
+            proposal_losses = {}
 
-        images = self.preprocess_image(batched_inputs)
-        gt_instances = None
+        _, detector_losses = self.roi_heads(images, features, proposals, gt_instances)
+        if self.vis_period > 0:
+            storage = get_event_storage()
+            if storage.iter % self.vis_period == 0:
+                self.visualize_training(batched_inputs, proposals)
 
-        features = self.backbone(images.tensor)
+        losses = {}
+        losses.update(detector_losses)
+        losses.update(proposal_losses)
+        return losses
+
+    def _forward_camrcnn(self, batched_inputs: List[Dict[str, torch.Tensor]], images, features):
         proposals = _add_whole_image_as_proposal(images, self.device)
-        proposal_losses = {}
 
         if "logits" in batched_inputs[0]:
             gt_instances = [
@@ -336,7 +350,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
 
         losses = {}
         losses.update(detector_losses)
-        losses.update(proposal_losses)
         return losses
 
     def _parse_dt_cam_inputs(self, batched_inputs):
@@ -362,12 +375,31 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         if not self.training:
             return self.inference(batched_inputs)
         dt_inputs, cam_inputs = self._parse_dt_cam_inputs(batched_inputs)
+        all_inputs = dt_inputs + cam_inputs
+        images = self.preprocess_image(all_inputs)
+        # NOTE: Doing all together means I need more memory
+        # but it's slightly faster than doing it in parts
+        features = self.backbone(images.tensor)
         dt_losses = {}
         cam_losses = {}
         if dt_inputs:
-            dt_losses = self._forward_generalized_rcnn(dt_inputs)
+            dt_losses = self._forward_generalized_rcnn(
+                dt_inputs,
+                ImageList(
+                    tensor=images.tensor[: len(dt_inputs)],
+                    image_sizes=images.image_sizes[: len(dt_inputs)],
+                ),
+                {k: v[: len(dt_inputs)] for k, v in features.items()},
+            )
         if cam_inputs:
-            cam_losses = self._forward_camrcnn(cam_inputs)
+            cam_losses = self._forward_camrcnn(
+                cam_inputs,
+                ImageList(
+                    tensor=images.tensor[len(dt_inputs):],
+                    image_sizes=images.image_sizes[len(dt_inputs):],
+                ),
+                {k: v[len(dt_inputs):] for k, v in features.items()},
+            )
         return {**dt_losses, **cam_losses}
 
     def inference(
