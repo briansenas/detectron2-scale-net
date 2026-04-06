@@ -305,6 +305,7 @@ _C.MODEL.HEIGHT_HEAD.NUM_CLASSES = 256
 _C.MODEL.HEIGHT_HEAD.LOSS_WEIGHT = 0.05  # alpha 2
 _C.MODEL.HEIGHT_HEAD.REDUCE_METHOD = "softmax"
 _C.MODEL.HEIGHT_HEAD.HUMAN_BINS = (1., 2.0)
+_C.MODEL.HEIGHT_HEAD.SMOOTH_L1_BETA = 0.0
 # Only used on test mode
 
 # Minimum score threshold (assuming scores in a [0, 1] range); a value chosen to

@@ -5,6 +5,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from detectron2.config import configurable
+from detectron2.data.detection_utils import prob_to_est
 from detectron2.layers import Conv2d, ConvTranspose2d, cat, interpolate
 from detectron2.structures import Instances, heatmaps_to_keypoints
 from detectron2.utils.events import get_event_storage
@@ -344,27 +345,3 @@ class KRCNNConvDeconvUpsampleHeadHeightPred(KRCNNConvDeconvUpsampleHead):
         else:
             keypoint_rcnn_inference(layers, instances)
             return instances
-
-
-def softmax_with_bins(input, bins):
-    # input: [N, D], bins: [D]
-    # return: [N]
-    return (nn.functional.softmax(input, dim=1) * bins).sum(dim=1)  # sum is reducing dims; [N]
-
-
-def argmax_with_bins(input, bins):
-    # input: [N, D], bins: [D]
-    # return: [N]
-    idxx = torch.argmax(input, dim=1)
-    est_batch = bins[idxx]
-    return est_batch
-
-
-def prob_to_est(input, bins, reduce_method='softmax', debug=False):
-    if reduce_method == 'softmax':
-        return softmax_with_bins(input, bins)
-    elif reduce_method == 'argmax':
-        return argmax_with_bins(input, bins)
-    else:
-        msg = "The reduce_method should be softmax or argmax"
-        raise ValueError(msg)

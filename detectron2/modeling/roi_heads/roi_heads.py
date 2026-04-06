@@ -25,7 +25,7 @@ from .box_head import (
     build_box_head,
 )
 from .fast_rcnn import FastRCNNOutputLayers
-from .keypoint_head import build_keypoint_head
+from .keypoint_head import build_keypoint_head, keypoint_rcnn_inference
 from .mask_head import build_mask_head
 
 ROI_HEADS_REGISTRY = Registry("ROI_HEADS")
@@ -1118,12 +1118,15 @@ class HeightStandardROIHeads(StandardROIHeads):
         all_person_hs = self.keypoint_head.person_h_logits_to_person_h_list(height_cls_logits)
         person_h_list = all_person_hs.split(num_instances_per_image)
         height_cls_logits_list = height_cls_logits.split(num_instances_per_image, dim=0)
-        for cls_logits, height, pred_instances in zip(height_cls_logits_list, person_h_list, instances):
+        for cls_logits, height, pred_instances, box in zip(height_cls_logits_list, person_h_list, instances, boxes):
+            pred_instances.pred_boxes = box
             pred_instances.pred_height_cls_logits = cls_logits
             pred_instances.pred_height = height
         if self.training:
             height_loss = self.keypoint_head.person_h_list_loss(all_person_hs, num_instances_per_image)
             keypoint_losses = self.keypoint_head(layers, instances)
+            # For height estimation we need the keypoints to calculate straight ratio and other
+            keypoint_rcnn_inference(layers, instances)
             return instances, {**keypoint_losses, "height_loss": height_loss}
         else:
             instances = self.keypoint_head(layers, instances)
@@ -1201,7 +1204,6 @@ class CameraHead(ROIHeads):
 
     def forward(
         self,
-        images: ImageList,
         features: Dict[str, torch.Tensor],
         proposals: List[Instances],
         targets: Optional[List[np.int64]] = None,
@@ -1209,7 +1211,6 @@ class CameraHead(ROIHeads):
         """
         See :class:`ROIHeads.forward`.
         """
-        del images
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
         x = self.predictor(box_features)
@@ -1267,7 +1268,6 @@ class CombinedCameraHeads(ROIHeads):
 
     def forward(
         self,
-        images: ImageList,
         features: Dict[str, torch.Tensor],
         proposals: List[Instances],
         targets: Optional[List[Instances]] = None,
@@ -1281,30 +1281,25 @@ class CombinedCameraHeads(ROIHeads):
             roll_targets = [x["gt_roll"] for x in targets]
             vfov_targets = [x["gt_vfov"] for x in targets]
         horizon_logits, horizon_loss = self.classifier_horizon(
-            images,
             features,
             proposals,
             horizon_targets,
         )
         pitch_logits, pitch_loss = self.classifier_pitch(
-            images,
             features,
             proposals,
             pitch_targets,
         )
         roll_logits, roll_loss = self.classifier_roll(
-            images,
             features,
             proposals,
             roll_targets,
         )
         vfov_logits, vfov_loss = self.classifier_vfov(
-            images,
             features,
             proposals,
             vfov_targets,
         )
-        del targets
         predictions = {
             "horizon_logits": horizon_logits,
             "pitch_logits": pitch_logits,

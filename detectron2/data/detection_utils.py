@@ -5,12 +5,11 @@
 Common data processing utilities that are used in a
 typical object detection data pipeline.
 """
-import logging
 import numpy as np
-from typing import List, Union
 import pycocotools.mask as mask_util
 import torch
 from PIL import Image
+from torch import nn
 
 from detectron2.structures import (
     BitMasks,
@@ -23,6 +22,9 @@ from detectron2.structures import (
     polygons_to_bitmask,
 )
 from detectron2.utils.file_io import PathManager
+
+import logging
+from typing import Dict, List, Union
 
 from . import transforms as T
 from .catalog import MetadataCatalog
@@ -203,8 +205,8 @@ def check_image_size(dataset_dict, image):
                     ),
                     image_wh,
                     expected_wh,
-                )
-                + " Please check the width/height in your annotation."
+                ) +
+                " Please check the width/height in your annotation."
             )
 
     # To ensure bbox always remap to original image size
@@ -660,3 +662,161 @@ build_transform_gen = build_augmentation
 """
 Alias for backward-compatibility.
 """
+
+
+def softmax_with_bins(input, bins):
+    # input: [N, D], bins: [D]
+    # return: [N]
+    return (nn.functional.softmax(input, dim=1) * bins).sum(dim=1)  # sum is reducing dims; [N]
+
+
+def argmax_with_bins(input, bins):
+    # input: [N, D], bins: [D]
+    # return: [N]
+    idxx = torch.argmax(input, dim=1)
+    est_batch = bins[idxx]
+    return est_batch
+
+
+def prob_to_est(input, bins, reduce_method='softmax', debug=False):
+    if reduce_method == 'softmax':
+        return softmax_with_bins(input, bins)
+    elif reduce_method == 'argmax':
+        return argmax_with_bins(input, bins)
+    else:
+        msg = "The reduce_method should be softmax or argmax"
+        raise ValueError(msg)
+
+
+def get_straighten_ratio_from_kps(keypoints, kp_thresh=2):
+    ratio_batch = []
+    dataset_keypoints = MetadataCatalog.get("keypoints_coco_2017_train").keypoint_names
+    for kps in keypoints:
+        kps = kps.transpose(1, 0)
+        mid_shoulder = (
+            kps[:2, dataset_keypoints.index("right_shoulder")] +
+            kps[:2, dataset_keypoints.index("left_shoulder")]
+        ) / 2.0
+        sc_mid_shoulder = torch.min(
+            kps[2, dataset_keypoints.index("right_shoulder")],
+            kps[2, dataset_keypoints.index("left_shoulder")],
+        )
+        mid_hip = (
+            kps[:2, dataset_keypoints.index("right_hip")] +
+            kps[:2, dataset_keypoints.index("left_hip")]
+        ) / 2.0
+        sc_mid_hip = torch.min(
+            kps[2, dataset_keypoints.index("right_hip")],
+            kps[2, dataset_keypoints.index("left_hip")],
+        )
+        dist_pred = 0.0
+        dist_straighten = 0.0
+
+        if sc_mid_shoulder > kp_thresh and sc_mid_hip > kp_thresh:
+            dist_pred += torch.abs(mid_shoulder[1] - mid_hip[1])
+            dist_straighten += pts_dist(mid_shoulder, mid_hip)
+
+        which_side_vis_list = []
+        for which_side in ["left", "right"]:
+            which_side_vis_list.append(
+                kps[2, dataset_keypoints.index(which_side + "_hip")] > kp_thresh and
+                kps[2, dataset_keypoints.index(which_side + "_ankle")] >
+                kp_thresh and
+                kps[2, dataset_keypoints.index(which_side + "_knee")] >
+                kp_thresh,
+            )
+
+        sides_reweight = sum(which_side_vis_list)
+        if sides_reweight > 0:
+            which_side_weight_array = (
+                np.asarray(which_side_vis_list) / sides_reweight
+            )
+        else:
+            which_side_weight_array = [0.0, 0.0]
+
+        for which_side, _, which_side_weight in zip(
+            ["left", "right"],
+            which_side_vis_list,
+            which_side_weight_array,
+        ):
+            kps_hip = kps[:2, dataset_keypoints.index(which_side + "_hip")]
+            kps_knee = kps[:2, dataset_keypoints.index(which_side + "_knee")]
+            kps_ankle = kps[:2, dataset_keypoints.index(which_side + "_ankle")]
+            dist_pred_side = torch.abs(kps_hip[1] - kps_ankle[1])
+            dist_straighten_side = pts_dist(kps_hip, kps_knee) + pts_dist(
+                kps_ankle,
+                kps_knee,
+            )
+            dist_pred += dist_pred_side * which_side_weight
+            dist_straighten += dist_straighten_side * which_side_weight
+
+        sides_reweight = sum(which_side_vis_list)
+        if sides_reweight > 0:
+            which_side_weight_array = (
+                np.asarray(which_side_vis_list) / sides_reweight
+            )
+        else:
+            which_side_weight_array = [0.0, 0.0]
+
+        if dist_straighten == 0.0 or dist_pred == 0.0:
+            ratio = 1.0
+        else:
+            ratio = np.clip(dist_pred / dist_straighten, 1e-5, 1.0)
+            assert ratio > 0.0 and ratio <= 1.01, "ratio is %.2f!" % ratio
+        ratio_batch.append(ratio)
+    return ratio_batch
+
+
+def pts_dist(pts1, pts2):
+    return torch.sqrt((pts1[0] - pts2[0]) ** 2 + (pts1[1] - pts2[1]) ** 2)
+
+
+def accu_model_batch(dataset_dict: dict):
+    yc_est, vb, y_person, v0, vc, f_pixels_est = (
+        dataset_dict["yc_est"],
+        dataset_dict["vb"],
+        dataset_dict["y_person"],
+        dataset_dict["v0"],
+        dataset_dict["vc"],
+        dataset_dict["f_pixels_est"],
+    )
+    if 'pitch_est' in dataset_dict:
+        theta_yannick = dataset_dict['pitch_est']
+    else:
+        theta_yannick = torch.atan((vc - v0) / f_pixels_est)
+    z = - (f_pixels_est * yc_est) / (f_pixels_est *
+                                     torch.sin(theta_yannick) - (vc - vb) * torch.cos(theta_yannick) + 1e-10)
+    vt_camEst = ((f_pixels_est * torch.cos(theta_yannick) + vc * torch.sin(theta_yannick)) * y_person +
+                 (-f_pixels_est * torch.sin(theta_yannick) + vc * torch.cos(theta_yannick)) * z +
+                 -f_pixels_est * yc_est) \
+        / (y_person * torch.sin(theta_yannick) + z * torch.cos(theta_yannick) + 1e-10)
+    negative_z = None
+    return vt_camEst, z, negative_z
+
+
+def _move_logits_to_device(batched_inputs: List[Dict[str, torch.Tensor]], device):
+    # NOTE: check whether that is a better way to map this elsewhere.
+    if "logits" in batched_inputs[0]:
+        for i, _ in enumerate(batched_inputs):
+            x = batched_inputs[i]["logits"].copy()
+            batched_inputs[i]["logits"] = dict(
+                gt_horizon=x["gt_horizon"].to(device),
+                gt_pitch=x["gt_pitch"].to(device),
+                gt_roll=x["gt_roll"].to(device),
+                gt_vfov=x["gt_vfov"].to(device),
+            )
+    return batched_inputs
+
+
+def _add_whole_image_as_proposal(images, device):
+    # Set the whole image as a proposal region for camera head.
+    proposals = []
+    for image_size in images.image_sizes:
+        h, w = image_size
+        # one box covering the whole image
+        full_box = torch.tensor([[0.0, 0.0, w, h]], device=device)
+        inst = Instances(image_size)
+        inst.proposal_boxes = Boxes(full_box)
+        inst.objectness_logits = torch.ones(1, device=device)
+        proposals.append(inst)
+    return proposals
