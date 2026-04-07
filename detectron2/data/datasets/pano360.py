@@ -78,6 +78,17 @@ def getBins(minval, maxval, sigma, alpha, beta, kappa):
     return cumsum
 
 
+def make_bins_layers_list(x_bins_lowHigh_list):
+    x_bins_layers_list = []
+    for _, x_bins_lowHigh in enumerate(x_bins_lowHigh_list):
+        x_bins = np.linspace(x_bins_lowHigh[0], x_bins_lowHigh[1], 255)
+        x_bins_centers = x_bins.copy()
+        x_bins_centers[:-1] += np.diff(x_bins_centers) / 2
+        x_bins_centers = np.append(x_bins_centers, x_bins_centers[-1])  # 42 bins
+        x_bins_layers_list.append(x_bins_centers)
+    return x_bins_layers_list
+
+
 pitch_bins_low = np.linspace(-np.pi / 2 + 1e-5, -5 * np.pi / 180.0, 31)
 pitch_bins_high = np.linspace(5 * np.pi / 180.0, np.pi / 6, 31)
 # crops_dataset_cvpr_myDistWider20200403:
@@ -100,6 +111,30 @@ vfov_bins = np.linspace(0.2389, 1.6, 255)
 vfov_bins_centers = vfov_bins.copy()
 vfov_bins_centers[:-1] += np.diff(vfov_bins_centers) / 2
 vfov_bins_centers = np.append(vfov_bins_centers, vfov_bins[-1])
+
+yc_bins_lowHigh_list = [[0.5, 5.], [-0.3, 0.3], [-0.15, 0.15], [-0.3, 0.3], [-0.15, 0.15]]  # 'YcLargeBins'
+yc_bins_layers_list = make_bins_layers_list(yc_bins_lowHigh_list)
+yc_bins_centers = yc_bins_layers_list[0]
+
+
+fmm_bins_lowHigh_list = [[0., 0.], [-0.2, 0.2], [-0.05, 0.05], [-0.05, 0.05], [-0.05, 0.05]]  # percentage!!
+fmm_bins_layers_list = make_bins_layers_list(fmm_bins_lowHigh_list)
+
+
+v0_bins_lowHigh_list = [[0., 0.], [-0.15, 0.15], [-0.05, 0.05], [-0.05, 0.05], [-0.05, 0.05]]  # 'SmallerBins'
+v0_bins_layers_list = make_bins_layers_list(v0_bins_lowHigh_list)
+
+# human_bins = np.linspace(1., 2., 256)
+human_bins = np.linspace(1., 1.9, 256)  # 'SmallerPersonBins'
+# human_bins = np.linspace(1., 2.5, 256) #  'V2PersonCenBins'
+# human_bins = np.linspace(0.7, 1.9, 256) #  'V3PersonCenBins'
+human_bins_1 = np.linspace(-0.2, 0.2, 256)
+human_bins_lowHigh_list = [[0., 0.], [-0.3, 0.15], [-0.10, 0.10], [-0.10, 0.10], [-0.05, 0.05]]  # 'SmallerBins'
+human_bins_layers_list = make_bins_layers_list(human_bins_lowHigh_list)
+
+car_bins = np.linspace(1.4, 1.70, 256)  # 'V2CarBins'
+car_bins_lowHigh_list = [[0., 0.], [-0.10, 0.10], [-0.05, 0.05], [-0.10, 0.10], [-0.05, 0.05]]  # 'SmallerBins'
+car_bins_layers_list = make_bins_layers_list(car_bins_lowHigh_list)
 
 
 def bins2horizon(bins):

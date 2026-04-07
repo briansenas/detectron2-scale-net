@@ -5,7 +5,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from detectron2.config import configurable
-from detectron2.data.detection_utils import prob_to_est
+from detectron2.data.detection_utils import get_straighten_ratio_from_kps, prob_to_est
 from detectron2.layers import Conv2d, ConvTranspose2d, cat, interpolate
 from detectron2.structures import Instances, heatmaps_to_keypoints
 from detectron2.utils.events import get_event_storage
@@ -133,6 +133,10 @@ def keypoint_rcnn_inference(pred_keypoint_logits: torch.Tensor, pred_instances: 
         # heatmap_results_per_image is (num instances)x(num keypoints)x(side)x(side)
         instances_per_image.pred_keypoints = keypoint_results_per_image
         instances_per_image.pred_keypoint_heatmaps = heatmap_results_per_image
+        # For ScaleNet
+        if instances_per_image.has("pred_height"):
+            instances_per_image.pred_straighten_ratio = torch.as_tensor(get_straighten_ratio_from_kps(
+                instances_per_image.pred_keypoints), device=keypoint_results_per_image.device)
 
 
 class BaseKeypointRCNNHead(nn.Module):

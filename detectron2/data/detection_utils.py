@@ -771,6 +771,25 @@ def pts_dist(pts1, pts2):
     return torch.sqrt((pts1[0] - pts2[0]) ** 2 + (pts1[1] - pts2[1]) ** 2)
 
 
+def fit_camH(bbox, H, v0, vc, f_pixels, y_person):
+    # bbox: [x, y, w, h]
+    # H: image height in px
+    # input and return both in [top H, bottom 0] space
+    vt = H - bbox[1]
+    vb = H - (bbox[1] + bbox[3])
+#     v0_single = yc * (vt - vb) / y_person + vb
+    yc_single = y_person * (v0 - vb) / (vt - vb) / (1. + (vc - v0) * (vc - vt) / f_pixels**2)
+    return yc_single
+
+
+def fit_vt(yc_fit, vb, v0, vc, y_person_fit, f_pixels_est):
+    inv_f2 = 1. / (f_pixels_est * f_pixels_est)
+    # input and return both in [top H, bottom 0] space
+    vt_camFit = (yc_fit * vb + y_person_fit * (v0 - vb) * (1. + inv_f2 * (vc - v0) * vc)) / \
+        (yc_fit + y_person_fit * (v0 - vb) * inv_f2 * (vc - v0))
+    return vt_camFit
+
+
 def accu_model_batch(dataset_dict: dict):
     yc_est, vb, y_person, v0, vc, f_pixels_est = (
         dataset_dict["yc_est"],
@@ -820,3 +839,28 @@ def _add_whole_image_as_proposal(images, device):
         inst.objectness_logits = torch.ones(1, device=device)
         proposals.append(inst)
     return proposals
+
+
+def pad_to_max(tensor_list, device, max_n, pad_value=0.0):
+    padded = []
+    mask = []
+
+    for t in tensor_list:
+        n = t.shape[0]
+        n_clamped = min(n, max_n)
+
+        # Slice if too large
+        t = t[:max_n]
+
+        pad_n = max_n - n_clamped
+        if pad_n > 0:
+            pad_shape = (pad_n, *t.shape[1:])
+            pad = torch.full(pad_shape, pad_value, device=device, dtype=t.dtype)
+            t = torch.cat([t, pad], dim=0)
+
+        padded.append(t)
+
+        m = torch.zeros(max_n, device=device)
+        m[:n_clamped] = 1.0
+        mask.append(m)
+    return torch.stack(padded), torch.stack(mask)

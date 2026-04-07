@@ -75,12 +75,12 @@ class COCOScale2017:
         im_path = self.img_files[k]
         bboxes = data["bboxes"].astype(np.float32)
         kps_gt = data["kps"].astype(int).tolist()
-        pitch = -1
-        vfov = -1
+        pitch = vfov = roll = -1
         if self.is_train:
             camera_parameters = loadmat(self.camera_parameters_files[k])
             pitch = camera_parameters["pitch"][0][0].astype(np.float32)
             vfov = camera_parameters["vfov"][0][0].astype(np.float32)
+            roll = camera_parameters["roll"][0][0].astype(np.float32)
         instances = []
         for bbox, kps in zip(bboxes, kps_gt):
             instances.append(dict(
@@ -95,6 +95,7 @@ class COCOScale2017:
             image_id=int(im_path.stem.lstrip("0")),
             pitch=pitch,
             vfov=vfov,
+            roll=roll,
             annotations=instances
         )
 
