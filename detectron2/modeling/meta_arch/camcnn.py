@@ -6,15 +6,17 @@ from torch import nn
 from detectron2.config import configurable
 from detectron2.data import MetadataCatalog
 from detectron2.data.datasets.pano360 import (
+    bins2horizon,
     bins2pitch,
     bins2roll,
     bins2vfov,
     horizon_bins_centers,
+    human_bins_layers_list,
     pitch_bins_centers,
     roll_bins_centers,
     showHorizonLine,
     vfov_bins_centers,
-    yc_bins_centers,
+    yc_bins_layers_list,
 )
 from detectron2.data.detection_utils import (
     _add_whole_image_as_proposal,
@@ -22,6 +24,7 @@ from detectron2.data.detection_utils import (
     accu_model_batch,
     convert_image_to_rgb,
     pad_to_max,
+    person_h_list_loss,
     prob_to_est,
 )
 from detectron2.layers import move_device_like
@@ -35,6 +38,7 @@ from ..proposal_generator import build_proposal_generator
 from ..roi_heads import build_camera_head, build_roi_heads
 from .build import META_ARCH_REGISTRY
 from .pointnet.pointnet_cls import CamHPointNet
+from .pointnet.pointnet_part_seg import CamHPersonHPointNet
 from .rcnn import GeneralizedRCNN
 
 __all__ = ["CameraRCNN", "GeneralizedCamRCNN"]
@@ -241,12 +245,19 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         horizon_bins_center: torch.tensor,
         pitch_bins_center: torch.tensor,
         vfov_bins_center: torch.tensor,
-        yc_bins_center: torch.tensor,
         roll_bins_center: torch.tensor,
-        point_net: nn.Module,
+        yc_bins_centers_list: Optional[List[torch.tensor]] = None,
+        human_height_centers_list: Optional[List[torch.tensor]] = None,
+        point_net: Optional[nn.Module] = None,
+        point_net_refine: Optional[nn.Module] = None,
+        point_net_refine_layers: Optional[int] = None,
+        height_mean: Optional[float] = None,
+        height_std: Optional[float] = None,
+        height_loss_weight: Optional[float] = None,
         reduce_method: str = "softmax",
         smooth_l1_beta: float = 0.0,
         input_format: Optional[str] = None,
+        padded_input_size: int = 100,
         vis_period: int = 0,
     ):
         """
@@ -271,18 +282,29 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         )
         self.camera_heads = camera_heads
         self.point_net = point_net
+        self.point_net_refine = point_net_refine
+        self.point_net_refine_layers = point_net_refine_layers
+        self.height_mean = height_mean
+        self.height_std = height_std
+        self.height_loss_weight = height_loss_weight
+        self.reduce_method = reduce_method
+        self.reduce_method = reduce_method
+        self.smooth_l1_beta = smooth_l1_beta
+        self.padded_input_size = padded_input_size
         self.register_buffer("horizon_bins_center", horizon_bins_center)
         self.register_buffer("pitch_bins_center", pitch_bins_center)
         self.register_buffer("vfov_bins_center", vfov_bins_center)
         self.register_buffer("roll_bins_center", roll_bins_center)
-        self.register_buffer("yc_bins_center", yc_bins_center)
-        self.reduce_method = reduce_method
-        self.smooth_l1_beta = smooth_l1_beta
+        self.height_on = self.point_net is not None
+        self.height_refine_on = point_net_refine is not None
+        if self.height_on:
+            self.register_buffer("yc_bins_centers_list", yc_bins_centers_list)
+            self.register_buffer("human_height_centers_list", human_height_centers_list)
 
     @classmethod
     def from_config(cls, cfg):
         backbone = build_backbone(cfg)
-        return {
+        ret = {
             "backbone": backbone,
             "proposal_generator": build_proposal_generator(
                 cfg,
@@ -298,11 +320,51 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             "pitch_bins_center": torch.as_tensor(pitch_bins_centers),
             "vfov_bins_center": torch.as_tensor(vfov_bins_centers),
             "roll_bins_center": torch.as_tensor(roll_bins_centers),
-            "yc_bins_center": torch.as_tensor(yc_bins_centers),
-            "point_net": CamHPointNet(in_channels=9, out_channels=cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES, with_bn=False),
             "reduce_method": cfg.MODEL.HEIGHT_HEAD.REDUCE_METHOD,
             "smooth_l1_beta": cfg.MODEL.HEIGHT_HEAD.SMOOTH_L1_BETA,
         }
+        if cfg.MODEL.HEIGHT_ON:
+            ret["padded_input_size"] = 100
+            ret["height_mean"] = cfg.MODEL.HEIGHT_MEAN
+            ret["height_std"] = cfg.MODEL.HEIGHT_STD
+            ret["height_loss_weight"] = cfg.MODEL.HEIGHT_HEAD.LOSS_WEIGHT
+            ret["yc_bins_centers_list"] = torch.stack(
+                [torch.from_numpy(yc_bins_layer).float() for yc_bins_layer in yc_bins_layers_list])
+            ret["human_height_centers_list"] = torch.stack(
+                [torch.from_numpy(human_bins_layer).float() for human_bins_layer in human_bins_layers_list])
+            ret["point_net"] = CamHPointNet(
+                in_channels=9, out_channels=cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES, with_bn=False)
+            if cfg.MODEL.HEIGHT_REFINE_ON:
+                point_net_refine = nn.ModuleDict([])
+                # NOTE: Maybe vary this later
+                point_net_refine_layers = 2
+                ret["point_net_refine_layers"] = point_net_refine_layers
+                for layer_idx in range(point_net_refine_layers):
+                    point_net_refine.update(
+                        {
+                            "point_net_refine_cls_layer_%d"
+                            % (layer_idx + 1): CamHPointNet(
+                                in_channels=10,
+                                out_channels=cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES,
+                                with_bn=False,
+                            )
+                        }
+                    )
+                    point_net_refine.update(
+                        {
+                            "point_net_refine_seg_layer_%d"
+                            % (layer_idx + 1): CamHPersonHPointNet(
+                                in_channels=10,
+                                num_classes_camH=cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES,
+                                num_seg_classes=cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES,
+                                if_cls=False,
+                                with_bn=False,
+                            )
+                        }
+                    )
+
+                ret["point_net_refine"] = point_net_refine
+        return ret
 
     def _get_camera_values(self, cls_logits):
         vfov = prob_to_est(
@@ -319,10 +381,11 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         )
         return vfov, pitch, roll, horizon
 
-    def _camrcnn_predictions(self, predicted_proposals: List[Instances], cls_logits):
+    def _camrcnn_predictions(self, predicted_proposals: List[Instances], cls_logits, camrcnn_data):
         valid_mask = [inst for inst in predicted_proposals if inst.pred_height.numel() > 0]
         if len(valid_mask) == 0:
             return {}, {}
+        camrcnn_data = camrcnn_data or {}
         vfov_est, pitch_est, _, _ = self._get_camera_values(cls_logits)
         H_batch = torch.tensor(
             [inst.image_size[0] for inst in predicted_proposals],
@@ -331,11 +394,10 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         gt_boxes_list = [inst.gt_boxes.tensor for inst in predicted_proposals]
         pred_height_list = [inst.pred_height for inst in predicted_proposals]
         pred_straighten_ratio_list = [inst.pred_straighten_ratio for inst in predicted_proposals]
-        MAX_N = 100
         # Padding
-        gt_boxes_pad, mask = pad_to_max(gt_boxes_list, self.device, MAX_N)
-        pred_height_pad, _ = pad_to_max(pred_height_list, self.device, MAX_N)
-        pred_straighten_ratio_pad, _ = pad_to_max(pred_straighten_ratio_list, self.device, MAX_N)
+        gt_boxes_pad, mask = pad_to_max(gt_boxes_list, self.device, self.padded_input_size)
+        pred_height_pad, _ = pad_to_max(pred_height_list, self.device, self.padded_input_size)
+        pred_straighten_ratio_pad, _ = pad_to_max(pred_straighten_ratio_list, self.device, self.padded_input_size)
 
         H = H_batch.unsqueeze(1)
 
@@ -355,21 +417,29 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         # Discount from predicted keypoints.
         h_human_s = pred_height_pad * pred_straighten_ratio_pad
 
-        # Attempt to predict camera height using PointNet
         bbox_y1y2_offset = gt_boxes_pad[:, :, [1, 3]] - (H - v0_pred).unsqueeze(-1)  # [top 0 , bottom H]
-        bbox_concat = torch.cat((gt_boxes_pad, bbox_y1y2_offset), 2) / H.unsqueeze(-1) - 0.05
-        vt_01_est = ((H - v0_pred) / H).view(-1, 1, 1).repeat(1, MAX_N, 1)
-        input_list = [
-            vt_01_est,
-            bbox_concat.view(gt_boxes_pad.shape[0], MAX_N, -1),
-            (pred_height_pad / self.roi_heads.keypoint_head.height_mean - 1).view(gt_boxes_pad.shape[0], MAX_N, -1),
-            (h_human_s / self.roi_heads.keypoint_head.height_mean - 1).view(gt_boxes_pad.shape[0], MAX_N, -1),
-        ]
-        points = torch.cat(input_list, 2).permute(0, 2, 1).float().to(self.device)
-        camH_cls_logits = self.point_net({'points': points})['cls_logit']
-        yc_est = prob_to_est(camH_cls_logits, self.yc_bins_center, self.reduce_method)
+        bboxes_offset_norm = (torch.cat((gt_boxes_pad, bbox_y1y2_offset), 2) / H.unsqueeze(-1) -
+                              0.05).view(gt_boxes_pad.shape[0], self.padded_input_size, -1)
+        if "yc_est" in camrcnn_data:
+            yc_est = camrcnn_data["yc_est"]
+        else:
+            vt_01_est = ((H - v0_pred) / H).view(-1, 1, 1).repeat(1, self.padded_input_size, 1)
+            person_h_norm = (pred_height_pad / self.height_mean -
+                             1).view(gt_boxes_pad.shape[0], self.padded_input_size, -1)
+            person_h_discount_norm = (h_human_s / self.height_mean -
+                                      1).view(gt_boxes_pad.shape[0], self.padded_input_size, -1)
+            input_list = [
+                vt_01_est,
+                bboxes_offset_norm,
+                person_h_norm,
+                person_h_discount_norm,
+            ]
+            points = torch.cat(input_list, 2).permute(0, 2, 1).float().to(self.device)
+            camH_cls_logits = self.point_net({'points': points})['cls_logit']
+            yc_est = prob_to_est(camH_cls_logits, self.yc_bins_centers_list[0], self.reduce_method).unsqueeze(1)
+
         geo_model_input_dict = {
-            "yc_est": yc_est.unsqueeze(1),
+            "yc_est": yc_est,
             "vb": vb,
             "y_person": h_human_s * torch.cos(-pitch),
             "v0": v0_pred,
@@ -378,7 +448,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             "pitch_est": -pitch,
         }
         vt_camEst_batch, _, _ = accu_model_batch(geo_model_input_dict)
-
         loss = smooth_l1_loss(
             vt,
             vt_camEst_batch,
@@ -389,14 +458,42 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         # Normalize by bbox height
         loss = loss / gt_boxes_pad[:, :, 3].clamp(min=eps)
         loss = torch.where(torch.isnan(loss), torch.zeros_like(loss), loss)
+        vt_camEst_N = torch.clamp(loss, -2.0, 2.0)
         loss = torch.clamp(loss, 0.0, 2.0)
         # Apply mask
         loss = loss * mask
+        vt_camEst_N = vt_camEst_N * mask
         # Per-instance mean
         vt_loss = (loss.sum(dim=1) / (mask.sum(dim=1) + eps)).mean()
-        return {}, {"vt_loss": vt_loss}
+        losses = {"vt_loss": vt_loss}
+        camrcnn_data = {
+            "mask": mask,
+            "H": H,
+            "yc_est": yc_est,
+            "yc_est_delta": vt_camEst_batch,
+            "v0_pred": v0_pred,
+            "vt_camEst_N": vt_camEst_N,
+            "person_h": pred_height_pad,
+            "straighten_ratio": pred_straighten_ratio_pad,
+            "bboxes_offset_norm": bboxes_offset_norm,
+        }
+        return camrcnn_data, losses
 
-    def visualize_training(self, batched_inputs, proposals, cls_logits):
+    def _draw_labels(self, visualizer, texts):
+        x, y = 10, 15  # top-left starting position
+        line_height = 15
+        for i, (k, v) in enumerate(sorted(texts.items())):
+            visualizer.draw_text(
+                f"{k}: {v}",
+                (x, y + i * line_height),
+                color="white",
+                horizontal_alignment="left",
+                font_size=10
+            )
+
+        return visualizer
+
+    def visualize_training(self, batched_inputs, proposals, cls_logits: Optional[dict] = None, camrcnn_data: Optional[dict] = None):
         """Basically the same as the GeneralizedRCNN method"""
         from detectron2.utils.visualizer import Visualizer
 
@@ -404,30 +501,48 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         max_vis_prop = 10
         metadata = MetadataCatalog.get("COCOScale2017Calib_train")
 
-        vfov_est, pitch_est, roll_est, _ = self._get_camera_values(cls_logits)
+        vfov_est, pitch_est, roll_est, horizon_est = self._get_camera_values(cls_logits)
         for i, (input, prop) in enumerate(zip(batched_inputs, proposals)):
+            if i != len(batched_inputs) - 1 and not prop.has("proposal_boxes") or len(prop.proposal_boxes) <= 1:
+                continue
             img = input["image"]
             img = convert_image_to_rgb(img.permute(1, 2, 0), self.input_format)
             v_gt = Visualizer(img, metadata=metadata)
-            v_gt = v_gt.overlay_instances(
+            v_gt.overlay_instances(
                 boxes=input["instances"].gt_boxes,
-                keypoints=input["instances"].gt_keypoints,
+                keypoints=input["instances"].gt_keypoints if self.height_on else None,
             )
             gt_pitch, gt_vfov, gt_roll = input["pitch"], input["vfov"], input["roll"]
-            anno_img = v_gt.get_image()
-            anno_img, _ = showHorizonLine(anno_img, gt_vfov, gt_pitch, gt_roll)
             box_size = min(len(prop.proposal_boxes), max_vis_prop)
             v_pred = Visualizer(img, metadata=None)  # Connections rules is noisy with box_size>1
-            v_pred = v_pred.overlay_instances(
+            v_pred.overlay_instances(
                 boxes=prop.proposal_boxes[0:box_size].tensor.cpu().numpy(),
-                keypoints=prop.pred_keypoints[0:box_size].detach().cpu().numpy(),
-                labels=(prop.pred_height[0: box_size] * prop.pred_straighten_ratio[0: box_size]).detach().cpu().numpy(),
+                keypoints=prop.pred_keypoints[0:box_size].detach().cpu().numpy() if self.height_on else None,
+                labels=(prop.pred_height[0: box_size] * prop.pred_straighten_ratio[0: box_size]
+                        ).detach().cpu().numpy() if self.height_on else None,
             )
-            prop_img = v_pred.get_image()
+            if self.height_on and camrcnn_data:
+                texts = {}
+                for col in ["vfov", "pitch", "roll", "horizon"]:
+                    texts[col] = input[col]
+                texts["yc_estCam"] = input["yc_estCam"]
+                v_gt = self._draw_labels(v_gt, texts)
+                texts["vfov"] = vfov_est[i]
+                texts["pitch"] = pitch_est[i]
+                texts["roll"] = roll_est[i]
+                texts["horizon"] = horizon_est[i]
+                texts["yc_estCam"] = camrcnn_data["yc_est"][i][0]
+                v_pred = self._draw_labels(
+                    v_pred,
+                    texts,
+                )
+            anno_img = v_gt.get_output().get_image()
+            prop_img = v_pred.get_output().get_image()
+            anno_img, _ = showHorizonLine(anno_img, gt_vfov, gt_pitch, gt_roll)
             prop_img, _ = showHorizonLine(
                 prop_img,
                 vfov_est[i].detach().cpu().numpy(),
-                pitch_est[i].detach().cpu().numpy(),
+                -pitch_est[i].detach().cpu().numpy(),
                 roll_est[i].detach().cpu().numpy(),
             )
             vis_img = np.concatenate((anno_img, prop_img), axis=1)
@@ -461,14 +576,12 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             proposal_losses = {}
 
         predicted_proposals, detector_losses = self.roi_heads(images, features, proposals, gt_instances)
+        if self.height_on:
+            detector_losses["height_loss"] *= self.height_loss_weight
         self.camera_heads.eval()
         with torch.no_grad():
             cls_logits, _ = self.camera_heads(features, _add_whole_image_as_proposal(images, self.device), None)
         self.camera_heads.train()
-        if self.vis_period > 0:
-            storage = get_event_storage()
-            if storage.iter % self.vis_period == 0:
-                self.visualize_training(batched_inputs, predicted_proposals, cls_logits)
 
         losses = {}
         losses.update(detector_losses)
@@ -511,6 +624,50 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         cam_inputs = _move_logits_to_device(cam_inputs, self.device)
         return dt_inputs, cam_inputs
 
+    def _camrcnn_refine(self, camrcnn_data):
+        mask = camrcnn_data["mask"]
+        eps = 1e-6
+        losses = []
+        v0_01_batch_est = ((camrcnn_data['H'] - camrcnn_data['v0_pred']) /
+                           camrcnn_data['H']).view(-1, 1, 1).repeat(1, self.padded_input_size, 1)
+        for layer_idx in range(self.point_net_refine_layers):
+            h_human_s = camrcnn_data["person_h"] * camrcnn_data["straighten_ratio"]
+            person_h_norm = (camrcnn_data["person_h"] / self.height_mean -
+                             1).view(camrcnn_data["person_h"].shape[0], self.padded_input_size, -1)
+            person_h_discount_norm = (h_human_s / self.height_mean -
+                                      1).view(camrcnn_data["person_h"].shape[0], self.padded_input_size, -1)
+            input_list = [v0_01_batch_est, camrcnn_data["bboxes_offset_norm"],
+                          camrcnn_data["yc_est_delta"].unsqueeze(-1), person_h_norm, person_h_discount_norm]
+            points = torch.cat(input_list, 2).permute(0, 2, 1).float().to(self.device)
+            point_net_refine_cls_layer_output = self.point_net_refine['point_net_refine_cls_layer_%d' % (
+                layer_idx + 1)]({'points': points})
+            camH_cls_logits_delta = point_net_refine_cls_layer_output['cls_logit']
+            yc_est_batch_delta = prob_to_est(
+                camH_cls_logits_delta, self.yc_bins_centers_list[layer_idx + 1], self.reduce_method)
+            # Refining our latest prediction of camera height
+            camrcnn_data["yc_est"] += yc_est_batch_delta.unsqueeze(1).repeat(1, 100)
+            point_net_refine_seg_layer_output = self.point_net_refine['point_net_refine_seg_layer_%d' % (
+                layer_idx + 1)]({'points': points})
+            personH_cls_logits_delta = point_net_refine_seg_layer_output['seg_logit'].permute(
+                0, 2, 1)  # [batchsize, N, 256]
+            all_person_hs_delta = prob_to_est(personH_cls_logits_delta.reshape(
+                -1, personH_cls_logits_delta.shape[-1]), self.human_height_centers_list[layer_idx + 1], self.reduce_method)
+            all_person_hs_delta = all_person_hs_delta.reshape(camrcnn_data["person_h"].shape)
+            camrcnn_data["person_h"] += all_person_hs_delta * mask
+            height_loss = (
+                person_h_list_loss(
+                    camrcnn_data["person_h"],
+                    self.height_mean,
+                    self.height_std,
+                    self.padded_input_size
+                ) *
+                mask *
+                self.height_loss_weight
+            )
+            height_loss = (height_loss.sum(dim=1) / (mask.sum(dim=1) + eps)).mean()
+            losses.append(height_loss)
+        return camrcnn_data, {"height_loss": sum(losses) / len(losses)}
+
     def forward(self, batched_inputs: List[Dict[str, torch.Tensor]]):
         """
         Args:
@@ -545,11 +702,30 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 dt_features_slice,
             )
             losses.update(dt_losses)
-            _, vt_loss = self._camrcnn_predictions(
-                predicted_proposals,
-                cls_logits,
-            )
-            losses.update(vt_loss)
+            camrcnn_data = {}
+            if self.height_on:
+                camrcnn_data, vt_loss = self._camrcnn_predictions(
+                    predicted_proposals,
+                    cls_logits,
+                    None,
+                )
+                losses.update(vt_loss)
+                if self.height_refine_on and camrcnn_data:
+                    camrcnn_data, refine_loss = self._camrcnn_refine(
+                        camrcnn_data,
+                    )
+                    losses["height_loss"] = (losses["height_loss"] + refine_loss["height_loss"]) / 2.0
+                    _, vt_loss = self._camrcnn_predictions(
+                        predicted_proposals,
+                        cls_logits,
+                        camrcnn_data,
+                    )
+                    losses["vt_loss"] = (losses["vt_loss"] + vt_loss["vt_loss"]) / 2.0
+
+            if self.vis_period > 0:
+                storage = get_event_storage()
+                if storage.iter % self.vis_period == 0:
+                    self.visualize_training(dt_inputs, predicted_proposals, cls_logits, camrcnn_data)
         if cam_inputs:
             _, cam_losses = self._forward_camrcnn(
                 cam_inputs,
@@ -604,21 +780,41 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             proposals (list): a list that contains predicted proposals. Both
                 batched_inputs and proposals should have the same length.
         """
+        from detectron2.utils.visualizer import Visualizer
+
         storage = get_event_storage()
         input = batched_inputs[0]
         pitch_logits = proposals["pitch_logits"][0].detach().cpu().numpy().squeeze()
         roll_logits = proposals["roll_logits"][0].detach().cpu().numpy().squeeze()
         vfov_logits = proposals["vfov_logits"][0].detach().cpu().numpy().squeeze()
+        horizon_logits = proposals["horizon_logits"][0].detach().cpu().numpy().squeeze()
         img = input["image"]
         img = convert_image_to_rgb(img.permute(1, 2, 0), self.input_format)
         pitch = bins2pitch(pitch_logits)
         roll = bins2roll(roll_logits)
         vfov = bins2vfov(vfov_logits)
+        horizon = bins2horizon(horizon_logits)
         gt_pitch = bins2pitch(input["logits"]["gt_pitch"].detach().cpu().numpy().squeeze())
         gt_roll = bins2roll(input["logits"]["gt_roll"].detach().cpu().numpy().squeeze())
         gt_vfov = bins2vfov(input["logits"]["gt_vfov"].detach().cpu().numpy().squeeze())
+        gt_horizon = bins2horizon(input["logits"]["gt_horizon"].detach().cpu().numpy().squeeze())
         anno_img, _ = showHorizonLine(img, gt_vfov, gt_pitch, gt_roll)
         prop_img, _ = showHorizonLine(img, vfov, pitch, roll)
+        v_gt = Visualizer(anno_img, None)
+        v_pred = Visualizer(prop_img, None)
+        texts = {}
+        texts["pitch"] = gt_pitch
+        texts["roll"] = gt_roll
+        texts["vfov"] = gt_pitch
+        texts["horizon"] = gt_horizon
+        v_gt = self._draw_labels(v_gt, texts)
+        texts["pitch"] = pitch
+        texts["roll"] = roll
+        texts["vfov"] = pitch
+        texts["horizon"] = horizon
+        v_pred = self._draw_labels(v_pred, texts)
+        anno_img = v_gt.get_output().get_image()
+        prop_img = v_pred.get_output().get_image()
         vis_img = np.concatenate((anno_img, prop_img), axis=1)
         vis_img = vis_img.transpose(2, 0, 1)
         vis_name = "Left: GT Horizon;  Right: Predicted Horizon"

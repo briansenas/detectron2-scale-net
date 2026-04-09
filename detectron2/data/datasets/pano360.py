@@ -128,7 +128,7 @@ v0_bins_layers_list = make_bins_layers_list(v0_bins_lowHigh_list)
 human_bins = np.linspace(1., 1.9, 256)  # 'SmallerPersonBins'
 # human_bins = np.linspace(1., 2.5, 256) #  'V2PersonCenBins'
 # human_bins = np.linspace(0.7, 1.9, 256) #  'V3PersonCenBins'
-human_bins_1 = np.linspace(-0.2, 0.2, 256)
+# human_bins_1 = np.linspace(-0.2, 0.2, 256)
 human_bins_lowHigh_list = [[0., 0.], [-0.3, 0.15], [-0.10, 0.10], [-0.10, 0.10], [-0.05, 0.05]]  # 'SmallerBins'
 human_bins_layers_list = make_bins_layers_list(human_bins_lowHigh_list)
 
@@ -153,6 +153,8 @@ def bins2roll(bins):
 
 
 def bins2vfov(bins):
+    bins[..., 0] = -35
+    bins[..., -1] = -35
     idxes = np.argmax(bins, axis=bins.ndim - 1)
     return vfov_bins_centers[idxes]
 

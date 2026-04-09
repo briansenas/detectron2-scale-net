@@ -81,6 +81,7 @@ class COCOScale2017:
             pitch = camera_parameters["pitch"][0][0].astype(np.float32)
             vfov = camera_parameters["vfov"][0][0].astype(np.float32)
             roll = camera_parameters["roll"][0][0].astype(np.float32)
+            horizon = camera_parameters["horizon"][0][0].astype(np.float32)
         instances = []
         for bbox, kps in zip(bboxes, kps_gt):
             instances.append(dict(
@@ -96,6 +97,7 @@ class COCOScale2017:
             pitch=pitch,
             vfov=vfov,
             roll=roll,
+            horizon=horizon,
             annotations=instances
         )
 

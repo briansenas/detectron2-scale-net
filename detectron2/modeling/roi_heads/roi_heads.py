@@ -4,6 +4,8 @@ import torch
 from torch import nn
 
 from detectron2.config import configurable
+from detectron2.data.datasets.pano360 import human_bins
+from detectron2.data.detection_utils import person_h_list_loss, prob_to_est
 from detectron2.layers import ShapeSpec, nonzero_tuple
 from detectron2.structures import Boxes, ImageList, Instances, pairwise_iou
 from detectron2.utils.events import get_event_storage
@@ -971,6 +973,8 @@ class HeightStandardROIHeads(StandardROIHeads):
         train_on_pred_boxes: bool = False,
         height_predictor: Optional[nn.Module] = None,
         height_cls_score: Optional[nn.Module] = None,
+        height_mean: Optional[float] = None,
+        height_std: Optional[float] = None,
         **kwargs,
     ):
         super().__init__(
@@ -987,8 +991,13 @@ class HeightStandardROIHeads(StandardROIHeads):
             train_on_pred_boxes=train_on_pred_boxes,
             **kwargs,
         )
+        self.height_on = height_predictor is not None
         self.height_predictor = height_predictor
         self.height_cls_score = height_cls_score
+        self.height_mean = height_mean
+        self.height_std = height_std
+        if height_mean:
+            self.register_buffer("human_bins", torch.as_tensor(human_bins))
 
     @classmethod
     def _init_keypoint_head(cls, cfg, input_shape):
@@ -1027,21 +1036,24 @@ class HeightStandardROIHeads(StandardROIHeads):
         ret["keypoint_head"] = build_keypoint_head(cfg, shape)
         # If we set the number of Conv3x to 0 and FC-2
         # We will have the same predictor as Jerry
-        height_predictor = FastRCNNConvFCHeadHeight(
-            cfg,
-            ShapeSpec(
-                channels=cfg.MODEL.ROI_KEYPOINT_HEAD.NUM_KEYPOINTS,
-                width=cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_RESOLUTION * 4.0,
-                height=cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_RESOLUTION * 4.0,
+        if cfg.MODEL.HEIGHT_ON:
+            height_predictor = FastRCNNConvFCHeadHeight(
+                cfg,
+                ShapeSpec(
+                    channels=cfg.MODEL.ROI_KEYPOINT_HEAD.NUM_KEYPOINTS,
+                    width=cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_RESOLUTION * 4.0,
+                    height=cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_RESOLUTION * 4.0,
+                )
             )
-        )
-        height_cls_score = nn.Linear(
-            cfg.MODEL.HEIGHT_HEAD.FC_DIM,
-            cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES,
-        )
-        nn.init.normal_(height_cls_score.weight, std=0.01)
-        ret["height_predictor"] = height_predictor
-        ret["height_cls_score"] = height_cls_score
+            height_cls_score = nn.Linear(
+                cfg.MODEL.HEIGHT_HEAD.FC_DIM,
+                cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES,
+            )
+            nn.init.normal_(height_cls_score.weight, std=0.01)
+            ret["height_predictor"] = height_predictor
+            ret["height_cls_score"] = height_cls_score
+            ret["height_mean"] = cfg.MODEL.HEIGHT_MEAN
+            ret["height_std"] = cfg.MODEL.HEIGHT_STD
         return ret
 
     def forward(
@@ -1066,8 +1078,11 @@ class HeightStandardROIHeads(StandardROIHeads):
             # heads. But when `self.train_on_pred_boxes is True`, proposals will contain boxes
             # predicted by the box head.
             losses.update(self._forward_mask(features, proposals))
-            proposals, keypoint_losses = self._forward_keypoint(features, proposals)
-            losses.update(keypoint_losses)
+            if self.height_on:
+                proposals, keypoint_losses = self._forward_keypoint_height(features, proposals)
+                losses.update(keypoint_losses)
+            else:
+                losses.update(self._forward_keypoint(features, proposals))
             return proposals, losses
         else:
             pred_instances = self._forward_box(features, proposals)
@@ -1076,7 +1091,7 @@ class HeightStandardROIHeads(StandardROIHeads):
             pred_instances = self.forward_with_given_boxes(features, pred_instances)
             return pred_instances, {}
 
-    def _forward_keypoint(
+    def _forward_keypoint_height(
         self,
         features: Dict[str, torch.Tensor],
         instances: List[Instances],
@@ -1095,9 +1110,6 @@ class HeightStandardROIHeads(StandardROIHeads):
             In training, a dict of losses.
             In inference, update `instances` with new fields "pred_keypoints" and return it.
         """
-        if not self.keypoint_on:
-            return {} if self.training else instances
-
         if self.training:
             # head is only trained on positive proposals with >=1 visible keypoints.
             instances, _ = select_foreground_proposals(instances, self.num_classes)
@@ -1115,7 +1127,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         num_instances_per_image = [len(i) for i in instances]
         height_features = self.height_predictor(layers)
         height_cls_logits = self.height_cls_score(height_features)
-        all_person_hs = self.keypoint_head.person_h_logits_to_person_h_list(height_cls_logits)
+        all_person_hs = prob_to_est(height_cls_logits, self.human_bins)
         person_h_list = all_person_hs.split(num_instances_per_image)
         height_cls_logits_list = height_cls_logits.split(num_instances_per_image, dim=0)
         for cls_logits, height, pred_instances, box in zip(height_cls_logits_list, person_h_list, instances, boxes):
@@ -1123,7 +1135,7 @@ class HeightStandardROIHeads(StandardROIHeads):
             pred_instances.pred_height_cls_logits = cls_logits
             pred_instances.pred_height = height
         if self.training:
-            height_loss = self.keypoint_head.person_h_list_loss(all_person_hs, num_instances_per_image)
+            height_loss = person_h_list_loss(all_person_hs, self.height_mean, self.height_std, num_instances_per_image)
             keypoint_losses = self.keypoint_head(layers, instances)
             # For height estimation we need the keypoints to calculate straight ratio and other
             keypoint_rcnn_inference(layers, instances)

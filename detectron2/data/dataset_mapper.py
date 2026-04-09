@@ -314,7 +314,7 @@ class COCOScaleMapper(DatasetMapper):
         if pitch is not None and vfov is not None:
             H = dataset_dict["height"]
             horizon = 0.5 - 0.5 * np.tan(pitch) / np.tan(vfov / 2)
-            dataset_dict["horizon"] = horizon
+            dataset_dict["horizon_pixels"] = horizon
             horizon_pixels_yannick = H * horizon
             v0 = H - horizon_pixels_yannick
             f_pixels_yannick = H / 2.0 / (np.tan(vfov / 2.0))

@@ -6,9 +6,11 @@ Common data processing utilities that are used in a
 typical object detection data pipeline.
 """
 import numpy as np
+import matplotlib.pyplot as plt
 import pycocotools.mask as mask_util
 import torch
 from PIL import Image
+from scipy.special import softmax
 from torch import nn
 
 from detectron2.structures import (
@@ -725,11 +727,11 @@ def get_straighten_ratio_from_kps(keypoints, kp_thresh=2):
                 kps[2, dataset_keypoints.index(which_side + "_knee")] >
                 kp_thresh,
             )
-
-        sides_reweight = sum(which_side_vis_list)
+        which_side_vis = torch.as_tensor(which_side_vis_list).to(keypoints[0].device)
+        sides_reweight = torch.sum(which_side_vis)
         if sides_reweight > 0:
             which_side_weight_array = (
-                np.asarray(which_side_vis_list) / sides_reweight
+                which_side_vis / sides_reweight
             )
         else:
             which_side_weight_array = [0.0, 0.0]
@@ -750,18 +752,10 @@ def get_straighten_ratio_from_kps(keypoints, kp_thresh=2):
             dist_pred += dist_pred_side * which_side_weight
             dist_straighten += dist_straighten_side * which_side_weight
 
-        sides_reweight = sum(which_side_vis_list)
-        if sides_reweight > 0:
-            which_side_weight_array = (
-                np.asarray(which_side_vis_list) / sides_reweight
-            )
-        else:
-            which_side_weight_array = [0.0, 0.0]
-
         if dist_straighten == 0.0 or dist_pred == 0.0:
             ratio = 1.0
         else:
-            ratio = np.clip(dist_pred / dist_straighten, 1e-5, 1.0)
+            ratio = torch.clip(dist_pred / dist_straighten, 1e-5, 1.0)
             assert ratio > 0.0 and ratio <= 1.01, "ratio is %.2f!" % ratio
         ratio_batch.append(ratio)
     return ratio_batch
@@ -864,3 +858,21 @@ def pad_to_max(tensor_list, device, max_n, pad_value=0.0):
         m[:n_clamped] = 1.0
         mask.append(m)
     return torch.stack(padded), torch.stack(mask)
+
+
+def human_prior(tensor, height_mean, height_std, ):
+    return 1. / np.sqrt(2. * np.pi * (height_std**2)) * torch.exp(-(tensor - height_mean)**2 / (2. * height_std**2))
+
+
+def person_h_list_loss(all_person_hs, height_mean, height_std, num_instances):
+    prob_all_person_hs = human_prior(all_person_hs, height_mean, height_std)
+    prob_all_person_h_list = prob_all_person_hs.split(num_instances)
+    return -torch.mean(
+        torch.stack(
+            [
+                torch.mean(prob_all_person_h) if prob_all_person_h.numel(
+                ) > 1 else torch.zeros(1)[0].to(all_person_hs.device)
+                for prob_all_person_h in prob_all_person_h_list
+            ]
+        )
+    )

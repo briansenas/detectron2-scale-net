@@ -29,6 +29,8 @@ _C.MODEL = CN()
 _C.MODEL.LOAD_PROPOSALS = False
 _C.MODEL.MASK_ON = False
 _C.MODEL.KEYPOINT_ON = False
+_C.MODEL.HEIGHT_ON = False
+_C.MODEL.HEIGHT_REFINE_ON = False
 _C.MODEL.DEVICE = "cuda"
 _C.MODEL.META_ARCHITECTURE = "GeneralizedRCNN"
 
@@ -304,7 +306,6 @@ _C.MODEL.HEIGHT_HEAD.NORM = ""
 _C.MODEL.HEIGHT_HEAD.NUM_CLASSES = 256
 _C.MODEL.HEIGHT_HEAD.LOSS_WEIGHT = 0.05  # alpha 2
 _C.MODEL.HEIGHT_HEAD.REDUCE_METHOD = "softmax"
-_C.MODEL.HEIGHT_HEAD.HUMAN_BINS = (1., 1.9)
 _C.MODEL.HEIGHT_HEAD.SMOOTH_L1_BETA = 0.0
 # Only used on test mode
 
@@ -596,7 +597,7 @@ _C.SOLVER.CHECKPOINT_PERIOD = 5000
 # and IMS_PER_BATCH = 32, each GPU will see 2 images per batch.
 # May be adjusted automatically if REFERENCE_WORLD_SIZE is set.
 _C.SOLVER.IMS_PER_BATCH = 16
-_C.SOLVER.RATIO_PANO360 = (2, 1)
+_C.SOLVER.RATIO_PANO360 = (3, 1)
 
 # The reference number of workers (GPUs) this config is meant to train with.
 # It takes no effect when set to 0.
