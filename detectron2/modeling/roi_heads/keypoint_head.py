@@ -133,10 +133,6 @@ def keypoint_rcnn_inference(pred_keypoint_logits: torch.Tensor, pred_instances: 
         # heatmap_results_per_image is (num instances)x(num keypoints)x(side)x(side)
         instances_per_image.pred_keypoints = keypoint_results_per_image
         instances_per_image.pred_keypoint_heatmaps = heatmap_results_per_image
-        # For ScaleNet
-        if instances_per_image.has("pred_height"):
-            instances_per_image.pred_straighten_ratio = torch.as_tensor(get_straighten_ratio_from_kps(
-                instances_per_image.pred_keypoints), device=keypoint_results_per_image.device)
 
 
 class BaseKeypointRCNNHead(nn.Module):

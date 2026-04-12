@@ -771,7 +771,6 @@ def fit_camH(bbox, H, v0, vc, f_pixels, y_person):
     # input and return both in [top H, bottom 0] space
     vt = H - bbox[1]
     vb = H - (bbox[1] + bbox[3])
-#     v0_single = yc * (vt - vb) / y_person + vb
     yc_single = y_person * (v0 - vb) / (vt - vb) / (1. + (vc - v0) * (vc - vt) / f_pixels**2)
     return yc_single
 
@@ -803,8 +802,7 @@ def accu_model_batch(dataset_dict: dict):
                  (-f_pixels_est * torch.sin(theta_yannick) + vc * torch.cos(theta_yannick)) * z +
                  -f_pixels_est * yc_est) \
         / (y_person * torch.sin(theta_yannick) + z * torch.cos(theta_yannick) + 1e-10)
-    negative_z = None
-    return vt_camEst, z, negative_z
+    return vt_camEst, z
 
 
 def _move_logits_to_device(batched_inputs: List[Dict[str, torch.Tensor]], device):

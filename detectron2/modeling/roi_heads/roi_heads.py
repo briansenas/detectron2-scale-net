@@ -7,7 +7,7 @@ from detectron2.config import configurable
 from detectron2.data.datasets.pano360 import human_bins
 from detectron2.data.detection_utils import person_h_list_loss, prob_to_est
 from detectron2.layers import ShapeSpec, nonzero_tuple
-from detectron2.structures import Boxes, ImageList, Instances, pairwise_iou
+from detectron2.structures import Boxes, ImageList, Instances, Keypoints, pairwise_iou
 from detectron2.utils.events import get_event_storage
 from detectron2.utils.registry import Registry
 
@@ -971,6 +971,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         keypoint_pooler: Optional[ROIPooler] = None,
         keypoint_head: Optional[nn.Module] = None,
         train_on_pred_boxes: bool = False,
+        test_topk_per_image: int = 10,
         height_predictor: Optional[nn.Module] = None,
         height_cls_score: Optional[nn.Module] = None,
         height_mean: Optional[float] = None,
@@ -991,6 +992,7 @@ class HeightStandardROIHeads(StandardROIHeads):
             train_on_pred_boxes=train_on_pred_boxes,
             **kwargs,
         )
+        self.test_topk_per_image = test_topk_per_image
         self.height_on = height_predictor is not None
         self.height_predictor = height_predictor
         self.height_cls_score = height_cls_score
@@ -1034,6 +1036,7 @@ class HeightStandardROIHeads(StandardROIHeads):
             shape = {f: input_shape[f] for f in in_features}
 
         ret["keypoint_head"] = build_keypoint_head(cfg, shape)
+        ret["test_topk_per_image"] = cfg.TEST.DETECTIONS_PER_IMAGE
         # If we set the number of Conv3x to 0 and FC-2
         # We will have the same predictor as Jerry
         if cfg.MODEL.HEIGHT_ON:
@@ -1056,6 +1059,55 @@ class HeightStandardROIHeads(StandardROIHeads):
             ret["height_std"] = cfg.MODEL.HEIGHT_STD
         return ret
 
+    def _add_gt_to_pred(self, pred_instances, targets):
+        new_pred_instances = []
+        for pred_inst, tgt in zip(pred_instances, targets):
+            # predictions
+            pred_boxes = pad_tensor(pred_inst.pred_boxes.tensor, self.test_topk_per_image, 0)
+            pred_classes = pad_tensor(pred_inst.pred_classes, self.test_topk_per_image, -1)
+
+            # targets
+            gt_boxes = pad_tensor(tgt.gt_boxes.tensor, self.test_topk_per_image, 0)
+            gt_classes = pad_tensor(tgt.gt_classes, self.test_topk_per_image, -1)
+            gt_keypoints = pad_tensor(tgt.gt_keypoints.tensor, self.test_topk_per_image, 0)
+
+            new_inst = Instances(pred_inst.image_size)
+            new_inst.pred_boxes = Boxes(pred_boxes)
+            new_inst.pred_classes = pred_classes
+            new_inst.proposal_boxes = Boxes(pred_boxes)
+            # assign padded GT into pred_instances
+            new_inst.gt_boxes = Boxes(gt_boxes)
+            new_inst.gt_classes = gt_classes
+            new_inst.gt_keypoints = Keypoints(gt_keypoints)
+
+            new_pred_instances.append(new_inst)
+
+        return new_pred_instances
+
+    def _forward_keypoint(
+        self,
+        features: Dict[str, torch.Tensor],
+        instances: List[Instances],
+    ):
+        if not self.keypoint_on:
+            return {} if self.training else instances
+
+        if self.training:
+            # head is only trained on positive proposals with >=1 visible keypoints.
+            instances, _ = select_foreground_proposals(instances, self.num_classes)
+            instances = select_proposals_with_visible_keypoints(instances)
+
+        if self.keypoint_pooler is not None:
+            features = [features[f] for f in self.keypoint_in_features]
+            boxes = [
+                x.proposal_boxes if self.training else x.pred_boxes for x in instances
+            ]
+            features = self.keypoint_pooler(features, boxes)
+        else:
+            features = {f: features[f] for f in self.keypoint_in_features}
+        # This part is what we removed from normal keypoint_head forward_call:
+        return self.keypoint_head(self.keypoint_head.layers(features), instances)
+
     def forward(
         self,
         images: ImageList,
@@ -1070,26 +1122,75 @@ class HeightStandardROIHeads(StandardROIHeads):
         if self.training:
             assert targets, "'targets' argument is required during training"
             proposals = self.label_and_sample_proposals(proposals, targets)
-        del targets
 
         if self.training:
-            losses = self._forward_box(features, proposals)
+            losses = {}
+            if self.height_on:
+                pred_instances, losses = self._forward_box_height(features, proposals)
+                pred_instances = self._add_gt_to_pred(pred_instances, targets)
+                del targets
+            else:
+                losses.update(self._forward_box(features, proposals))
             # Usually the original proposals used by the box head are used by the mask, keypoint
             # heads. But when `self.train_on_pred_boxes is True`, proposals will contain boxes
             # predicted by the box head.
             losses.update(self._forward_mask(features, proposals))
+            losses.update(self._forward_keypoint(features, proposals))
             if self.height_on:
-                proposals, keypoint_losses = self._forward_keypoint_height(features, proposals)
+                proposals, keypoint_losses = self._forward_keypoint_height(features, pred_instances)
                 losses.update(keypoint_losses)
-            else:
-                losses.update(self._forward_keypoint(features, proposals))
             return proposals, losses
         else:
-            pred_instances = self._forward_box(features, proposals)
+            pred_instances, _ = self._forward_box(features, proposals)
             # During inference cascaded prediction is used: the mask and keypoints heads are only
             # applied to the top scoring box detections.
             pred_instances = self.forward_with_given_boxes(features, pred_instances)
             return pred_instances, {}
+
+    def _forward_box_height(
+        self,
+        features: Dict[str, torch.Tensor],
+        proposals: List[Instances],
+    ):
+        """
+        Forward logic of the box prediction branch. If `self.train_on_pred_boxes is True`,
+            the function puts predicted boxes in the `proposal_boxes` field of `proposals` argument.
+
+        Args:
+            features (dict[str, Tensor]): mapping from feature map names to tensor.
+                Same as in :meth:`ROIHeads.forward`.
+            proposals (list[Instances]): the per-image object proposals with
+                their matching ground truth.
+                Each has fields "proposal_boxes", and "objectness_logits",
+                "gt_classes", "gt_boxes".
+
+        Returns:
+            In training, a dict of losses.
+            In inference, a list of `Instances`, the predicted instances.
+        """
+        features = [features[f] for f in self.box_in_features]
+        box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
+        box_features = self.box_head(box_features)
+        predictions = self.box_predictor(box_features)
+        del box_features
+        losses = {}
+        if self.training:
+            losses = self.box_predictor.losses(predictions, proposals)
+            # proposals is modified in-place below, so losses must be computed first.
+            if self.train_on_pred_boxes:
+                with torch.no_grad():
+                    pred_boxes = self.box_predictor.predict_boxes_for_gt_classes(
+                        predictions,
+                        proposals,
+                    )
+                    for proposals_per_image, pred_boxes_per_image in zip(
+                        proposals,
+                        pred_boxes,
+                    ):
+                        proposals_per_image.proposal_boxes = Boxes(pred_boxes_per_image)
+        with torch.no_grad():
+            pred_instances, _ = self.box_predictor.inference(predictions, proposals)
+        return pred_instances, losses
 
     def _forward_keypoint_height(
         self,
@@ -1110,39 +1211,38 @@ class HeightStandardROIHeads(StandardROIHeads):
             In training, a dict of losses.
             In inference, update `instances` with new fields "pred_keypoints" and return it.
         """
-        if self.training:
-            # head is only trained on positive proposals with >=1 visible keypoints.
-            instances, _ = select_foreground_proposals(instances, self.num_classes)
-            instances = select_proposals_with_visible_keypoints(instances)
+        with torch.no_grad():
+            if self.training:
+                # head is only trained on positive proposals with >=1 visible keypoints.
+                instances, _ = select_foreground_proposals(instances, self.num_classes)
+                instances = select_proposals_with_visible_keypoints(instances)
 
-        if self.keypoint_pooler is not None:
-            features = [features[f] for f in self.keypoint_in_features]
-            boxes = [
-                x.proposal_boxes if self.training else x.pred_boxes for x in instances
-            ]
-            features = self.keypoint_pooler(features, boxes)
-        else:
-            features = {f: features[f] for f in self.keypoint_in_features}
-        layers = self.keypoint_head.layers(features)
+            if self.keypoint_pooler is not None:
+                features = [features[f] for f in self.keypoint_in_features]
+                boxes = [
+                    x.pred_boxes for x in instances
+                ]
+                features = self.keypoint_pooler(features, boxes)
+            else:
+                features = {f: features[f] for f in self.keypoint_in_features}
+            layers = self.keypoint_head.layers(features)
+            del features
+            keypoint_rcnn_inference(layers, instances)
         num_instances_per_image = [len(i) for i in instances]
         height_features = self.height_predictor(layers)
+        del layers
         height_cls_logits = self.height_cls_score(height_features)
+        del height_features
         all_person_hs = prob_to_est(height_cls_logits, self.human_bins)
         person_h_list = all_person_hs.split(num_instances_per_image)
         height_cls_logits_list = height_cls_logits.split(num_instances_per_image, dim=0)
-        for cls_logits, height, pred_instances, box in zip(height_cls_logits_list, person_h_list, instances, boxes):
-            pred_instances.pred_boxes = box
-            pred_instances.pred_height_cls_logits = cls_logits
+        losses = {}
+        for _, height, pred_instances in zip(height_cls_logits_list, person_h_list, instances):
             pred_instances.pred_height = height
         if self.training:
             height_loss = person_h_list_loss(all_person_hs, self.height_mean, self.height_std, num_instances_per_image)
-            keypoint_losses = self.keypoint_head(layers, instances)
-            # For height estimation we need the keypoints to calculate straight ratio and other
-            keypoint_rcnn_inference(layers, instances)
-            return instances, {**keypoint_losses, "height_loss": height_loss}
-        else:
-            instances = self.keypoint_head(layers, instances)
-            return instances
+            losses["height_loss"] = height_loss
+        return instances, losses
 
 
 @ROI_HEADS_REGISTRY.register()
@@ -1226,7 +1326,9 @@ class CameraHead(ROIHeads):
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
         x = self.predictor(box_features)
+        del features
         class_logits = self.cls_score(x)
+        del x
         class_loss = None
         if self.training:
             assert targets, "'targets' argument is required during training"
@@ -1325,3 +1427,20 @@ class CombinedCameraHeads(ROIHeads):
             "vfov_loss": vfov_loss,
         }
         return predictions, losses
+
+
+def pad_tensor(x, target_len, pad_value=0):
+    """
+    Pads or truncates tensor `x` along dim=0 to `target_len`.
+    """
+    cur_len = x.shape[0]
+
+    if cur_len == target_len:
+        return x
+
+    if cur_len > target_len:
+        return x[:target_len]
+
+    pad_shape = (target_len - cur_len, *x.shape[1:])
+    pad = torch.full(pad_shape, pad_value, dtype=x.dtype, device=x.device)
+    return torch.cat([x, pad], dim=0)

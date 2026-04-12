@@ -153,8 +153,6 @@ def bins2roll(bins):
 
 
 def bins2vfov(bins):
-    bins[..., 0] = -35
-    bins[..., -1] = -35
     idxes = np.argmax(bins, axis=bins.ndim - 1)
     return vfov_bins_centers[idxes]
 
