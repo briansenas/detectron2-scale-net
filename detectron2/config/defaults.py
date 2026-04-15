@@ -308,7 +308,20 @@ _C.MODEL.HEIGHT_HEAD.NUM_CLASSES = 256
 _C.MODEL.HEIGHT_HEAD.LOSS_WEIGHT = 0.05  # alpha 2
 _C.MODEL.HEIGHT_HEAD.REDUCE_METHOD = "softmax"
 _C.MODEL.HEIGHT_HEAD.SMOOTH_L1_BETA = 0.0
+_C.MODEL.HEIGHT_HEAD.PADDED_INPUT = 10
 # Only used on test mode
+
+# ---------------------------------------------------------------------------- #
+# POINT NET options
+# ---------------------------------------------------------------------------- #
+
+_C.MODEL.POINT_NET = CN()
+_C.MODEL.POINT_NET.BN = True
+_C.MODEL.POINT_NET.TRANSFORM = True
+# The values that are allowed are avg, max and hybrid.
+_C.MODEL.POINT_NET.POOLING = "max"
+_C.MODEL.POINT_NET.TEMPERATURE = 0.5
+_C.MODEL.POINT_NET.DETACH = True
 
 # Minimum score threshold (assuming scores in a [0, 1] range); a value chosen to
 # balance obtaining high recall with not having too many low precision
@@ -650,7 +663,7 @@ _C.TEST.EVAL_PERIOD = 0
 _C.TEST.KEYPOINT_OKS_SIGMAS = []
 # Maximum number of detections to return per image during inference (100 is
 # based on the limit established for the COCO dataset).
-_C.TEST.DETECTIONS_PER_IMAGE = 5
+_C.TEST.DETECTIONS_PER_IMAGE = 100
 
 _C.TEST.AUG = CN({"ENABLED": False})
 _C.TEST.AUG.MIN_SIZES = (400, 500, 600, 700, 800, 900, 1000, 1100, 1200)

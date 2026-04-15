@@ -849,6 +849,8 @@ def pad_to_max(tensor_list, device, max_n, pad_value=0.0):
             pad_shape = (pad_n, *t.shape[1:])
             pad = torch.full(pad_shape, pad_value, device=device, dtype=t.dtype)
             t = torch.cat([t, pad], dim=0)
+        else:
+            t = t[:max_n]
 
         padded.append(t)
 

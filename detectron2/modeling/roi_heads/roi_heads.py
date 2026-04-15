@@ -971,7 +971,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         keypoint_pooler: Optional[ROIPooler] = None,
         keypoint_head: Optional[nn.Module] = None,
         train_on_pred_boxes: bool = False,
-        test_topk_per_image: int = 10,
+        padded_input_size: int = 10,
         height_predictor: Optional[nn.Module] = None,
         height_cls_score: Optional[nn.Module] = None,
         height_mean: Optional[float] = None,
@@ -992,7 +992,7 @@ class HeightStandardROIHeads(StandardROIHeads):
             train_on_pred_boxes=train_on_pred_boxes,
             **kwargs,
         )
-        self.test_topk_per_image = test_topk_per_image
+        self.padded_input_size = padded_input_size
         self.height_on = height_predictor is not None
         self.height_predictor = height_predictor
         self.height_cls_score = height_cls_score
@@ -1036,7 +1036,7 @@ class HeightStandardROIHeads(StandardROIHeads):
             shape = {f: input_shape[f] for f in in_features}
 
         ret["keypoint_head"] = build_keypoint_head(cfg, shape)
-        ret["test_topk_per_image"] = cfg.TEST.DETECTIONS_PER_IMAGE
+        ret["padded_input_size"] = cfg.MODEL.HEIGHT_HEAD.PADDED_INPUT
         # If we set the number of Conv3x to 0 and FC-2
         # We will have the same predictor as Jerry
         if cfg.MODEL.HEIGHT_ON:
@@ -1063,13 +1063,13 @@ class HeightStandardROIHeads(StandardROIHeads):
         new_pred_instances = []
         for pred_inst, tgt in zip(pred_instances, targets):
             # predictions
-            pred_boxes = pad_tensor(pred_inst.pred_boxes.tensor, self.test_topk_per_image, 0)
-            pred_classes = pad_tensor(pred_inst.pred_classes, self.test_topk_per_image, -1)
+            pred_boxes = pad_tensor(pred_inst.pred_boxes.tensor, self.padded_input_size, 0)
+            pred_classes = pad_tensor(pred_inst.pred_classes, self.padded_input_size, -1)
 
             # targets
-            gt_boxes = pad_tensor(tgt.gt_boxes.tensor, self.test_topk_per_image, 0)
-            gt_classes = pad_tensor(tgt.gt_classes, self.test_topk_per_image, -1)
-            gt_keypoints = pad_tensor(tgt.gt_keypoints.tensor, self.test_topk_per_image, 0)
+            gt_boxes = pad_tensor(tgt.gt_boxes.tensor, self.padded_input_size, 0)
+            gt_classes = pad_tensor(tgt.gt_classes, self.padded_input_size, -1)
+            gt_keypoints = pad_tensor(tgt.gt_keypoints.tensor, self.padded_input_size, 0)
 
             new_inst = Instances(pred_inst.image_size)
             new_inst.pred_boxes = Boxes(pred_boxes)

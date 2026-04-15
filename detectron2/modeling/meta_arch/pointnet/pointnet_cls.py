@@ -260,7 +260,8 @@ class CamHPointNet(nn.Module):
                  dropout_prob=0.3,
                  with_transform=True,
                  with_bn=True,
-                 with_FC=True):
+                 with_FC=True,
+                 with_pooling: str = "max"):
         super(CamHPointNet, self).__init__()
 
         self.in_channels = in_channels
@@ -271,21 +272,38 @@ class CamHPointNet(nn.Module):
 
         self.stem = Stem(in_channels, stem_channels, with_transform=with_transform, bn=with_bn)
         self.mlp_local = SharedMLP(stem_channels[-1], local_channels, bn=with_bn)
-        self.mlp_global = MLP(local_channels[-1], global_channels, dropout_prob=dropout_prob, bn=with_bn)
+        if with_pooling == "hybrid":
+            self.mlp_global = MLP(local_channels[-1] * 2, global_channels, dropout_prob=dropout_prob, bn=with_bn)
+            self.pool = self._hybrid_pool
+        else:
+            self.mlp_global = MLP(local_channels[-1], global_channels, dropout_prob=dropout_prob, bn=with_bn)
+            self.pool = self._avg_pool if with_pooling == "avg" else self._max_pool
         if self.with_FC:
             self.fc = FC(global_channels[-1], global_channels[-1], bn=with_bn)
         self.classifier = nn.Linear(global_channels[-1], out_channels, bias=True)
         self.init_weights()
 
+    def _max_pool(self, x: torch.Tensor, mask: torch.Tensor):
+        return torch.max(x.masked_fill(mask == 0, torch.finfo(x.dtype).min), 2)[0]
+
+    def _avg_pool(self, x: torch.Tensor, mask: torch.Tensor):
+        return (x * mask).sum(dim=2) / (mask.sum(dim=2) + 1e-6)
+
+    def _hybrid_pool(self, x: torch.Tensor, mask: torch.Tensor):
+        return torch.concat([
+            self._max_pool(x, mask),
+            self._avg_pool(x, mask)
+        ], dim=1)
+
     def forward(self, data_batch):
-        x = data_batch['points']
+        x = data_batch["points"]
+        mask = data_batch["mask"]
         # stem
         x, end_points = self.stem(x)
         # mlp for local features
         x = self.mlp_local(x)
-        # max pool over points
-        x, max_indices = torch.max(x, 2)
-        end_points['key_point_indices'] = max_indices
+        # # max pool over points
+        x = self.pool(x, mask)
         # mlp for global features
         x = self.mlp_global(x)
 

@@ -261,6 +261,7 @@ class CamHPersonHPointNet(nn.Module):
                  dropout_prob_seg=0.2,
                  with_transform=True,
                  with_bn=True,
+                 with_pooling: str = "max",
                  if_cls=True):
         """
 
@@ -289,28 +290,45 @@ class CamHPersonHPointNet(nn.Module):
         self.stem = Stem(in_channels, stem_channels, with_transform=with_transform, bn=with_bn)
         self.mlp_local = SharedMLP(stem_channels[-1], local_channels, bn=with_bn)
 
+        local_channels_size = local_channels[-1] if with_pooling != "hybrid" else local_channels[-1] * 2
+        self.pool = self._avg_pool if with_pooling == "avg" else self._max_pool
+        if with_pooling == "hybrid":
+            self.pool = self._hybrid_pool
         if self.if_cls:
             # classification
             # Notice that we apply dropout to each classification mlp.
             # -- pointnet_camH_refine
-            self.mlp_cls = MLP(local_channels[-1], cls_channels, dropout_prob=dropout_prob_cls, bn=with_bn)
+            self.mlp_cls = MLP(local_channels_size, cls_channels, dropout_prob=dropout_prob_cls, bn=with_bn)
             self.cls_logit = nn.Linear(cls_channels[-1], num_classes_camH, bias=True)
 
         # part segmentation
         # Notice that the original repo concatenates global feature, one hot class embedding,
         # stem features and local features. However, the paper does not use last local feature.
         # Here, we follow the released repo.
-        in_channels_seg = local_channels[-1] + sum(stem_channels) + sum(local_channels)
+        in_channels_seg = local_channels_size + sum(stem_channels) + sum(local_channels)
         self.mlp_seg = SharedMLP(in_channels_seg, seg_channels[:-1], dropout_prob=dropout_prob_seg, bn=with_bn)
         self.conv_seg = Conv1d(seg_channels[-2], seg_channels[-1], 1)
         self.seg_logit = nn.Conv1d(seg_channels[-1], num_seg_classes, 1, bias=True)
 
         self.init_weights()
 
+    def _max_pool(self, x: torch.Tensor, mask: torch.Tensor):
+        return torch.max(x.masked_fill(mask == 0, torch.finfo(x.dtype).min), 2)[0]
+
+    def _avg_pool(self, x: torch.Tensor, mask: torch.Tensor):
+        return (x * mask).sum(dim=2) / (mask.sum(dim=2) + 1e-6)
+
+    def _hybrid_pool(self, x: torch.Tensor, mask: torch.Tensor):
+        return torch.concat([
+            self._max_pool(x, mask),
+            self._avg_pool(x, mask)
+        ], dim=1)
+
     def forward(self, data_batch):
         preds = {}
 
         x = data_batch["points"]
+        mask = data_batch["mask"]
         # cls_label = data_batch["cls_label"]
         num_points = x.shape[2]
         end_points = {}
@@ -330,8 +348,7 @@ class CamHPersonHPointNet(nn.Module):
             local_features.append(x)
 
         # max pool over points
-        global_feature, max_indices = torch.max(x, 2)  # (batch_size, local_channels[-1])
-        end_points['key_point_inds'] = max_indices
+        global_feature = self.pool(x, mask)
 
         if self.if_cls:
             # classification

@@ -23,7 +23,7 @@ class FC(nn.Module):
 
         self.fc = nn.Linear(in_channels, out_channels, bias=(not bn))
         self.bn = nn.BatchNorm1d(out_channels, momentum=bn_momentum) if bn else None
-        self.relu = nn.ReLU(inplace=True) if relu else None
+        self.relu = nn.LeakyReLU(inplace=True) if relu else None
 
     def forward(self, x):
         x = self.fc(x)
