@@ -1211,37 +1211,37 @@ class HeightStandardROIHeads(StandardROIHeads):
             In training, a dict of losses.
             In inference, update `instances` with new fields "pred_keypoints" and return it.
         """
-        with torch.no_grad():
-            if self.training:
-                # head is only trained on positive proposals with >=1 visible keypoints.
-                instances, _ = select_foreground_proposals(instances, self.num_classes)
-                instances = select_proposals_with_visible_keypoints(instances)
-
-            if self.keypoint_pooler is not None:
-                features = [features[f] for f in self.keypoint_in_features]
-                boxes = [
-                    x.pred_boxes for x in instances
-                ]
-                features = self.keypoint_pooler(features, boxes)
-            else:
-                features = {f: features[f] for f in self.keypoint_in_features}
-            layers = self.keypoint_head.layers(features)
-            del features
-            keypoint_rcnn_inference(layers, instances)
-        num_instances_per_image = [len(i) for i in instances]
-        height_features = self.height_predictor(layers)
-        del layers
-        height_cls_logits = self.height_cls_score(height_features)
-        del height_features
-        all_person_hs = prob_to_est(height_cls_logits, self.human_bins)
-        person_h_list = all_person_hs.split(num_instances_per_image)
-        height_cls_logits_list = height_cls_logits.split(num_instances_per_image, dim=0)
         losses = {}
-        for _, height, pred_instances in zip(height_cls_logits_list, person_h_list, instances):
+        if self.training:
+            # head is only trained on positive proposals with >=1 visible keypoints.
+            instances, _ = select_foreground_proposals(instances, self.num_classes)
+            instances = select_proposals_with_visible_keypoints(instances)
+
+        if self.keypoint_pooler is not None:
+            features = [features[f] for f in self.keypoint_in_features]
+            boxes = [
+                x.pred_boxes for x in instances
+            ]
+            features = self.keypoint_pooler(features, boxes)
+        else:
+            features = {f: features[f] for f in self.keypoint_in_features}
+        layers = self.keypoint_head.layers(features)
+        del features
+        keypoint_rcnn_inference(layers, instances)
+        all_person_hs = prob_to_est(
+            self.height_cls_score(self.height_predictor(layers)), self.human_bins
+        )
+        del layers
+        num_instances_per_image = [len(i) for i in instances]
+        for height, pred_instances in zip(all_person_hs.split(num_instances_per_image), instances):
             pred_instances.pred_height = height
         if self.training:
-            height_loss = person_h_list_loss(all_person_hs, self.height_mean, self.height_std, num_instances_per_image)
-            losses["height_loss"] = height_loss
+            losses["height_loss"] = person_h_list_loss(
+                all_person_hs,
+                self.height_mean,
+                self.height_std,
+                num_instances_per_image,
+            )
         return instances, losses
 
 
