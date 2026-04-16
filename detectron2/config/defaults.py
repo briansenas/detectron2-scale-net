@@ -320,8 +320,10 @@ _C.MODEL.POINT_NET.BN = True
 _C.MODEL.POINT_NET.TRANSFORM = True
 # The values that are allowed are avg, max and hybrid.
 _C.MODEL.POINT_NET.POOLING = "max"
-_C.MODEL.POINT_NET.TEMPERATURE = 0.5
+_C.MODEL.POINT_NET.TEMPERATURE = 0.75
 _C.MODEL.POINT_NET.DETACH = True
+_C.MODEL.POINT_NET.REFINE_TEMPERATURE = 0.75
+_C.MODEL.POINT_NET.REFINE_LAYERS = 2
 
 # Minimum score threshold (assuming scores in a [0, 1] range); a value chosen to
 # balance obtaining high recall with not having too many low precision
