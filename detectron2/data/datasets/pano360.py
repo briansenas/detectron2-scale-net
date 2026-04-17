@@ -172,6 +172,8 @@ class CalibDataset:
         logger: logging.Logger | None = None,
         json_name: str = "datasets/train_crops_dataset_cvpr_myDistWider.json",
         debug: bool = False,
+        debug_train_size: int = 1000,
+        debug_eval_size: int = 200,
     ):
         if logger is None:
             self.logger = logging.getLogger(__name__)
@@ -181,10 +183,10 @@ class CalibDataset:
         with open(json_name) as fhdl:
             self.data = json.load(fhdl)
 
-        max_load = -1 if not debug else 100
+        max_load = -1 if not debug else debug_train_size
         self.data = self.data[:max_load]  # Only use 100 examples
         random.shuffle(self.data)
-        train_load = -2000 if not debug else -50
+        train_load = -2000 if not debug else -debug_eval_size
         if train:
             self.data = self.data[:train_load]
         else:

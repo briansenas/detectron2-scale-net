@@ -27,7 +27,7 @@ from .box_head import (
     build_box_head,
 )
 from .fast_rcnn import FastRCNNOutputLayers
-from .keypoint_head import build_keypoint_head, keypoint_rcnn_inference
+from .keypoint_head import build_keypoint_head, keypoint_rcnn_inference_no_heatmap
 from .mask_head import build_mask_head
 
 ROI_HEADS_REGISTRY = Registry("ROI_HEADS")
@@ -1059,30 +1059,83 @@ class HeightStandardROIHeads(StandardROIHeads):
             ret["height_std"] = cfg.MODEL.HEIGHT_STD
         return ret
 
-    def _add_gt_to_pred(self, pred_instances, targets):
-        new_pred_instances = []
-        for pred_inst, tgt in zip(pred_instances, targets):
-            # predictions
-            pred_boxes = pad_tensor(pred_inst.pred_boxes.tensor, self.padded_input_size, 0)
-            pred_classes = pad_tensor(pred_inst.pred_classes, self.padded_input_size, -1)
+    def _add_gt_to_pred(
+        self,
+        pred_instances,
+        gt_instances,
+        iou_thresh=0.5,
+    ):
+        matcher = Matcher([iou_thresh], [0, 1], allow_low_quality_matches=False)
+        results = []
 
-            # targets
-            gt_boxes = pad_tensor(tgt.gt_boxes.tensor, self.padded_input_size, 0)
-            gt_classes = pad_tensor(tgt.gt_classes, self.padded_input_size, -1)
-            gt_keypoints = pad_tensor(tgt.gt_keypoints.tensor, self.padded_input_size, 0)
+        for preds, gts in zip(pred_instances, gt_instances):
+            device = preds.pred_boxes.tensor.device
 
-            new_inst = Instances(pred_inst.image_size)
-            new_inst.pred_boxes = Boxes(pred_boxes)
-            new_inst.pred_classes = pred_classes
-            new_inst.proposal_boxes = Boxes(pred_boxes)
-            # assign padded GT into pred_instances
-            new_inst.gt_boxes = Boxes(gt_boxes)
-            new_inst.gt_classes = gt_classes
-            new_inst.gt_keypoints = Keypoints(gt_keypoints)
+            if len(preds) > 0:
+                pred_boxes = preds.pred_boxes
+                pred_classes = preds.pred_classes
+            else:
+                pred_boxes = torch.zeros((0, 4), device=device)
+                pred_classes = torch.zeros((0,), dtype=torch.long, device=device)
 
-            new_pred_instances.append(new_inst)
+            if len(preds) > 0 and len(gts) > 0:
+                gt_boxes = gts.gt_boxes
+                iou_matrix = pairwise_iou(gt_boxes, pred_boxes)
+                matched_idxs, labels = matcher(iou_matrix)
+                valid_mask = labels == 1
+                # keep only valid matches
+                matched_idxs = matched_idxs[valid_mask]
+                pred_boxes.tensor = pred_boxes.tensor[valid_mask]
+                gt_fields = {}
+                for k, v in gts.get_fields().items():
+                    if isinstance(v, torch.Tensor):
+                        gt_fields[k] = v[matched_idxs]
+                    else:
+                        # e.g. Boxes, BitMasks, etc.
+                        gt_fields[k] = v[matched_idxs]
 
-        return new_pred_instances
+            else:
+                valid_mask = torch.zeros_like(pred_classes, dtype=torch.bool, device=device)
+                gt_fields = {
+                    k: torch.full_like(pred_classes, -1, device=device)
+                    for k in gts.get_fields().keys()
+                }
+
+            pred_boxes = pred_boxes.tensor
+            valid_mask = torch.ones(pred_boxes.shape[0], dtype=bool, device=device)
+            valid_mask = pad_tensor(valid_mask, self.padded_input_size, 0.0)
+            pred_boxes = pad_tensor(pred_boxes, self.padded_input_size, 0.0)
+            pred_classes = pad_tensor(pred_classes, self.padded_input_size, -1)
+            valid_mask = pad_tensor(valid_mask, self.padded_input_size, False)
+
+            inst = Instances(
+                image_size=preds.image_size if len(preds) > 0 else gts.image_size
+            )
+
+            inst.pred_boxes = Boxes(pred_boxes)
+            inst.proposal_boxes = Boxes(pred_boxes)
+            inst.pred_classes = pred_classes
+            inst.valid_mask = valid_mask
+
+            for k, v in gt_fields.items():
+                if k == "gt_classes":
+                    setattr(inst, k, pad_tensor(v, self.padded_input_size, -1).to(device))
+
+                elif isinstance(v, torch.Tensor):
+                    setattr(
+                        inst, k, pad_tensor(v, self.padded_input_size, 0).to(device)
+                    )
+                else:
+                    if isinstance(v, Boxes):
+                        setattr(
+                            inst, k, Boxes(pad_tensor(v.tensor, self.padded_input_size, 0).to(device))
+                        )
+                    if isinstance(v, Keypoints):
+                        setattr(
+                            inst, k, Keypoints(pad_tensor(v.tensor, self.padded_input_size, 0).to(device))
+                        )
+            results.append(inst)
+        return results
 
     def _forward_keypoint(
         self,
@@ -1127,14 +1180,17 @@ class HeightStandardROIHeads(StandardROIHeads):
             losses = {}
             if self.height_on:
                 pred_instances, losses = self._forward_box_height(features, proposals)
-                pred_instances = self._add_gt_to_pred(pred_instances, targets)
-                del targets
+                with torch.no_grad():
+                    pred_instances = self._add_gt_to_pred(pred_instances, targets)
             else:
                 losses.update(self._forward_box(features, proposals))
+            del targets
             # Usually the original proposals used by the box head are used by the mask, keypoint
             # heads. But when `self.train_on_pred_boxes is True`, proposals will contain boxes
             # predicted by the box head.
             losses.update(self._forward_mask(features, proposals))
+            # NOTE: for multi-cat I would've to edit this forward to always do keypoint_inference_proposals
+            # So that for the instances that contain people I get a new field keypoints (hopefully w pointers).
             losses.update(self._forward_keypoint(features, proposals))
             if self.height_on:
                 proposals, keypoint_losses = self._forward_keypoint_height(features, pred_instances)
@@ -1190,6 +1246,9 @@ class HeightStandardROIHeads(StandardROIHeads):
                         proposals_per_image.proposal_boxes = Boxes(pred_boxes_per_image)
         with torch.no_grad():
             pred_instances, _ = self.box_predictor.inference(predictions, proposals)
+        # Note: for multicategory estimation I believe I should do height estimation here
+        # Were the loss would depend on the class type (different a-priori) ussing box_features
+        # And set a new field in pred_instances.
         return pred_instances, losses
 
     def _forward_keypoint_height(
@@ -1227,7 +1286,8 @@ class HeightStandardROIHeads(StandardROIHeads):
             features = {f: features[f] for f in self.keypoint_in_features}
         layers = self.keypoint_head.layers(features)
         del features
-        keypoint_rcnn_inference(layers, instances)
+        # Copy of keypoint_rcnn_inference that don't save the logits during training.
+        keypoint_rcnn_inference_no_heatmap(layers, instances)
         all_person_hs = prob_to_est(
             self.height_cls_score(self.height_predictor(layers)), self.human_bins
         )

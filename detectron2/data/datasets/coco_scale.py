@@ -23,6 +23,7 @@ class COCOScale2017:
         coco_json_file_path: str | Path,
         coco_image_root_path: str | Path,
         coco_scale_pickle_path: str | Path,
+        debug_size: int = 1000,
     ):
         if logger is None:
             self.logger = logging.getLogger(__name__)
@@ -60,8 +61,8 @@ class COCOScale2017:
                 for pickle_file in self.pickle_files
             ]
         if debug:
-            self.pickle_files = self.pickle_files[:100]
-            self.img_files = self.img_files[:100]
+            self.pickle_files = self.pickle_files[:debug_size]
+            self.img_files = self.img_files[:debug_size]
 
         assert len(self.img_files) == len(self.pickle_files)
         if shuffle and self.is_train:
