@@ -31,7 +31,6 @@ from detectron2.data.detection_utils import (
 from detectron2.layers import move_device_like
 from detectron2.structures import ImageList, Instances
 from detectron2.utils.events import get_event_storage
-from detectron2.utils.logger import setup_logger
 
 from typing import Dict, List, Optional, Tuple
 
@@ -299,7 +298,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         self.smooth_l1_beta = smooth_l1_beta
         self.padded_input_size = padded_input_size
         self.discount_from = discount_from
-        self.logger = setup_logger()
         self.register_buffer("horizon_bins_center", horizon_bins_center)
         self.register_buffer("pitch_bins_center", pitch_bins_center)
         self.register_buffer("vfov_bins_center", vfov_bins_center)

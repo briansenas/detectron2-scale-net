@@ -4,10 +4,11 @@ MODEL:
   META_ARCHITECTURE: "GeneralizedCamRCNN"
   ROI_HEADS:
     NAME: "HeightStandardROIHeads"
-    LOSS_WEIGHT: 10
+  ROI_BOX_HEAD:
+    BBOX_REG_LOSS_WEIGHT: 10.0
   ROI_KEYPOINT_HEAD:
     NAME: "KRCNNConvDeconvUpsampleHeadHeightPred"
-    LOSS_WEIGHT: 10
+    LOSS_WEIGHT: 10.0
   KEYPOINT_ON: True
   HEIGHT_ON: True
   HEIGHT_REFINE_ON: True

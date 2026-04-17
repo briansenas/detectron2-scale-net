@@ -399,10 +399,6 @@ class HybridDataMapper(DatasetMapper):
         self.keypoint_hflip_indices = keypoint_hflip_indices
         self.proposal_topk          = precomputed_proposal_topk
         self.recompute_boxes        = recompute_boxes
-        # fmt: on
-        logger = logging.getLogger(__name__)
-        mode = "training" if is_train else "inference"
-        logger.info(f"[DatasetMapper] Augmentations used in {mode}: {augmentations}")
 
     @classmethod
     def from_config(cls, cfg, is_train: bool = True):
