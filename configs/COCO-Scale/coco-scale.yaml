@@ -1,0 +1,22 @@
+_BASE_: "../COCO-Keypoints/keypoint_rcnn_R_50_FPN_3x.yaml"
+MODEL:
+  WEIGHTS: "models/detectron2-R50-KeypointDetection.pkl"
+  KEYPOINT_ON: True
+DATASETS:
+  TRAIN: ("COCOScale2017_train", )
+  TEST: ()
+SOLVER:
+  # The dataset total size is 187206, 2000 for validation.
+  IMS_PER_BATCH: 16  # 16 for 1 gpus.
+  BASE_LR: 0.00625  # 0.00625 for 1 gpu
+  STEPS: (13000, 17000)
+  MAX_ITER: 20000
+  AMP:
+    ENABLED: True
+TEST:
+  EVAL_PERIOD: 0
+DATALOADER:
+  FILTER_EMPTY_ANNOTATIONS: True
+  ASPECT_RATIO_GROUPING: True
+VIS_PERIOD: 500
+FLOAT32_PRECISION: "medium"
