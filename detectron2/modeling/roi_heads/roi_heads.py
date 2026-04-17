@@ -1389,16 +1389,16 @@ class CameraHead(ROIHeads):
         del features
         class_logits = self.cls_score(x)
         del x
-        class_loss = None
-        if self.training:
-            assert targets, "'targets' argument is required during training"
-            targets = torch.stack(targets)
-            class_loss = nn.functional.kl_div(
-                nn.functional.log_softmax(class_logits, dim=1),
-                targets,
-                reduction="batchmean",
-            )
-        return class_logits, class_loss
+        return class_logits
+
+    def compute_loss(self, logits, targets):
+        assert targets, "'targets' argument is required during training"
+        targets = torch.stack(targets)
+        return nn.functional.kl_div(
+            nn.functional.log_softmax(logits, dim=1),
+            targets,
+            reduction="batchmean",
+        )
 
 
 @ROI_HEADS_REGISTRY.register()
@@ -1447,35 +1447,21 @@ class CombinedCameraHeads(ROIHeads):
         targets: Optional[List[Instances]] = None,
     ):
         losses = {}
-        horizon_targets = []
-        pitch_targets = []
-        roll_targets = []
-        vfov_targets = []
-        if self.training:
-            assert targets, "'targets' argument is required during training"
-            horizon_targets = [x["gt_horizon"] for x in targets]
-            pitch_targets = [x["gt_pitch"] for x in targets]
-            roll_targets = [x["gt_roll"] for x in targets]
-            vfov_targets = [x["gt_vfov"] for x in targets]
-        horizon_logits, horizon_loss = self.classifier_horizon(
+        horizon_logits = self.classifier_horizon(
             features,
             proposals,
-            horizon_targets,
         )
-        pitch_logits, pitch_loss = self.classifier_pitch(
+        pitch_logits = self.classifier_pitch(
             features,
             proposals,
-            pitch_targets,
         )
-        roll_logits, roll_loss = self.classifier_roll(
+        roll_logits = self.classifier_roll(
             features,
             proposals,
-            roll_targets,
         )
-        vfov_logits, vfov_loss = self.classifier_vfov(
+        vfov_logits = self.classifier_vfov(
             features,
             proposals,
-            vfov_targets,
         )
         predictions = {
             "horizon_logits": horizon_logits,
@@ -1483,12 +1469,32 @@ class CombinedCameraHeads(ROIHeads):
             "roll_logits": roll_logits,
             "vfov_logits": vfov_logits,
         }
-        losses = {
-            "horizon_loss": horizon_loss,
-            "pitch_loss": pitch_loss,
-            "roll_loss": roll_loss,
-            "vfov_loss": vfov_loss,
-        }
+        losses = {}
+        if self.training:
+            assert targets, "'targets' argument is required during training"
+            idxs = [i for i, x in enumerate(targets) if "gt_horizon" in x]
+            horizon_loss = self.classifier_horizon.compute_loss(
+                horizon_logits[idxs],
+                [x["gt_horizon"] for x in targets if "gt_horizon" in x],
+            )
+            pitch_loss = self.classifier_pitch.compute_loss(
+                pitch_logits[idxs],
+                [x["gt_pitch"] for x in targets if "gt_pitch" in x],
+            )
+            roll_loss = self.classifier_roll.compute_loss(
+                roll_logits[idxs],
+                [x["gt_roll"] for x in targets if "gt_roll" in x],
+            )
+            vfov_loss = self.classifier_vfov.compute_loss(
+                vfov_logits[idxs],
+                [x["gt_vfov"] for x in targets if "gt_vfov" in x],
+            )
+            losses = {
+                "horizon_loss": horizon_loss,
+                "pitch_loss": pitch_loss,
+                "roll_loss": roll_loss,
+                "vfov_loss": vfov_loss,
+            }
         return predictions, losses
 
 

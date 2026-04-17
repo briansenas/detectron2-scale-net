@@ -626,7 +626,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             storage.put_image(vis_name, vis_img)
             break  # only visualize one image in a batch
 
-    def _forward_generalized_rcnn(self, batched_inputs: List[Dict[str, torch.Tensor]]):
+    def _forward_generalized_rcnn(self, batched_inputs: List[Dict[str, torch.Tensor]], images, features):
         """
         Args:
             Same as in :class:`GeneralizedRCNN.forward`
@@ -637,8 +637,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 The dict contains one key "proposals" whose value is a
                 :class:`Instances` with keys "proposal_boxes" and "objectness_logits".
         """
-        images = self.preprocess_image(batched_inputs)
-        features = self.backbone(images.tensor)
         # Check if tensors share memory
         if "instances" in batched_inputs[0]:
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
@@ -653,36 +651,26 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             proposal_losses = {}
 
         proposals, detector_losses = self.roi_heads(images, features, proposals, gt_instances)
+        del images
         if self.height_on:
             detector_losses["height_loss"] *= self.height_loss_weight
-        self.camera_heads.eval()
-        with torch.no_grad():
-            cls_logits, _ = self.camera_heads(features, _add_whole_image_as_proposal(images, self.device), None)
-        vfov_est, pitch_est, roll_est, horizon_est = self._get_camera_values(cls_logits)
-        del cls_logits, images
-        camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, "horizon_est": horizon_est}
-        self.camera_heads.train()
 
         losses = {}
         losses.update(detector_losses)
         losses.update(proposal_losses)
-        return proposals, camrcnn_data, losses
+        return proposals, losses
 
-    def _forward_camrcnn(self, batched_inputs: List[Dict[str, torch.Tensor]]):
-        images = self.preprocess_image(batched_inputs)
-        proposals = _add_whole_image_as_proposal(images, self.device)
-        features = self.backbone(images.tensor)
-        del images
-        if "logits" in batched_inputs[0]:
-            gt_instances = [
-                dict(
-                    gt_horizon=x["logits"]["gt_horizon"].to(self.device),
-                    gt_pitch=x["logits"]["gt_pitch"].to(self.device),
-                    gt_roll=x["logits"]["gt_roll"].to(self.device),
-                    gt_vfov=x["logits"]["gt_vfov"].to(self.device),
-                )
-                for x in batched_inputs
-            ]
+    def _forward_camrcnn(self, batched_inputs: List[Dict[str, torch.Tensor]], features, proposals):
+        gt_instances = [
+            dict(
+                gt_horizon=x["logits"]["gt_horizon"].to(self.device),
+                gt_pitch=x["logits"]["gt_pitch"].to(self.device),
+                gt_roll=x["logits"]["gt_roll"].to(self.device),
+                gt_vfov=x["logits"]["gt_vfov"].to(self.device),
+            )
+            if "logits" in x else {}
+            for x in batched_inputs
+        ]
         predictions, detector_losses = self.camera_heads(
             features,
             proposals,
@@ -787,11 +775,31 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         if not self.training:
             return self.inference(batched_inputs)
         dt_inputs, cam_inputs = self._parse_dt_cam_inputs(batched_inputs)
+        all_inputs = dt_inputs + cam_inputs
         losses = {}
+        images = self.preprocess_image(all_inputs)
+        cam_proposals = _add_whole_image_as_proposal(images, self.device)
+        features = self.backbone(images.tensor)
+        proposals, dt_losses = self._forward_generalized_rcnn(
+            dt_inputs,
+            ImageList(
+                tensor=images.tensor[: len(dt_inputs)],
+                image_sizes=images.image_sizes[: len(dt_inputs)],
+            ),
+            {k: v[: len(dt_inputs)] for k, v in features.items()}
+        )
+        del images
+        cls_logits, cam_losses = self._forward_camrcnn(
+            all_inputs,
+            features,
+            cam_proposals
+        )
+        del features
+        dt_logits = {k: v[:len(dt_inputs)] for k, v in cls_logits.items()}
+        vfov_est, pitch_est, roll_est, horizon_est = self._get_camera_values(dt_logits)
+        camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, "horizon_est": horizon_est}
+        losses.update(cam_losses)
         if dt_inputs:
-            proposals, camrcnn_data, dt_losses = self._forward_generalized_rcnn(
-                dt_inputs,
-            )
             losses.update(dt_losses)
             if self.height_on:
                 camrcnn_data, vt_loss = self._camrcnn_predictions(
@@ -814,11 +822,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 storage = get_event_storage()
                 if storage.iter % self.vis_period == 0:
                     self.visualize_training(dt_inputs, proposals, camrcnn_data)
-        if cam_inputs:
-            _, cam_losses = self._forward_camrcnn(
-                cam_inputs,
-            )
-            losses.update(cam_losses)
         return losses
 
     def inference(
@@ -866,11 +869,12 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         from detectron2.utils.visualizer import Visualizer
 
         storage = get_event_storage()
-        input = batched_inputs[0]
-        pitch_logits = proposals["pitch_logits"][0].detach().cpu().numpy().squeeze()
-        roll_logits = proposals["roll_logits"][0].detach().cpu().numpy().squeeze()
-        vfov_logits = proposals["vfov_logits"][0].detach().cpu().numpy().squeeze()
-        horizon_logits = proposals["horizon_logits"][0].detach().cpu().numpy().squeeze()
+        idx = [i for i, x in enumerate(batched_inputs) if "logits" in x][0]
+        input = batched_inputs[idx]
+        pitch_logits = proposals["pitch_logits"][idx].detach().cpu().numpy().squeeze()
+        roll_logits = proposals["roll_logits"][idx].detach().cpu().numpy().squeeze()
+        vfov_logits = proposals["vfov_logits"][idx].detach().cpu().numpy().squeeze()
+        horizon_logits = proposals["horizon_logits"][idx].detach().cpu().numpy().squeeze()
         img = input["image"]
         img = convert_image_to_rgb(img.permute(1, 2, 0), self.input_format)
         pitch = bins2pitch(pitch_logits)
