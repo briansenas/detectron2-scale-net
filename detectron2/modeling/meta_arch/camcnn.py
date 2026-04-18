@@ -789,39 +789,38 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             {k: v[: len(dt_inputs)] for k, v in features.items()}
         )
         del images
+        losses.update(dt_losses)
         cls_logits, cam_losses = self._forward_camrcnn(
             all_inputs,
             features,
             cam_proposals
         )
         del features
+        losses.update(cam_losses)
         dt_logits = {k: v[:len(dt_inputs)] for k, v in cls_logits.items()}
         vfov_est, pitch_est, roll_est, horizon_est = self._get_camera_values(dt_logits)
         camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, "horizon_est": horizon_est}
-        losses.update(cam_losses)
-        if dt_inputs:
-            losses.update(dt_losses)
-            if self.height_on:
+        if self.height_on:
+            camrcnn_data, vt_loss = self._camrcnn_predictions(
+                proposals,
+                camrcnn_data,
+            )
+            losses.update(vt_loss)
+            if self.height_refine_on and camrcnn_data:
+                camrcnn_data, refine_loss = self._camrcnn_refine(
+                    camrcnn_data,
+                )
+                losses["height_loss"] = (losses["height_loss"] + refine_loss["height_loss"]) / 2.0
                 camrcnn_data, vt_loss = self._camrcnn_predictions(
                     proposals,
                     camrcnn_data,
                 )
-                losses.update(vt_loss)
-                if self.height_refine_on and camrcnn_data:
-                    camrcnn_data, refine_loss = self._camrcnn_refine(
-                        camrcnn_data,
-                    )
-                    losses["height_loss"] = (losses["height_loss"] + refine_loss["height_loss"]) / 2.0
-                    camrcnn_data, vt_loss = self._camrcnn_predictions(
-                        proposals,
-                        camrcnn_data,
-                    )
-                    losses["vt_loss"] = (losses["vt_loss"] + vt_loss["vt_loss"]) / 2.0
+                losses["vt_loss"] = (losses["vt_loss"] + vt_loss["vt_loss"]) / 2.0
 
-            if self.vis_period > 0:
-                storage = get_event_storage()
-                if storage.iter % self.vis_period == 0:
-                    self.visualize_training(dt_inputs, proposals, camrcnn_data)
+        if self.vis_period > 0:
+            storage = get_event_storage()
+            if storage.iter % self.vis_period == 0:
+                self.visualize_training(dt_inputs, proposals, camrcnn_data)
         return losses
 
     def inference(
