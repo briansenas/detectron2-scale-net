@@ -33,9 +33,9 @@ SOLVER:
   # IMS_PER_BATCH: 4 (No Height + AMP) - 3 (Height + AMP) - 2 (Height + Refine + AMP) - (2 Height + Refine)
   # ASSUMING RATIO (3,1) -- which we can also tune if batch size is hard to
   # With refine we can try 2x(4, 2) or just scale with more than 1 gpu.
-  IMS_PER_BATCH: 2  # (NO_HEIGHT)
+  IMS_PER_BATCH: 6  # 2-1gpu 6-3gpu
   RATIO_PANO360: (3, 1)  # 3 COCO, 1 CALIB
-  BASE_LR: 0.003125
+  BASE_LR: 0.007031  # 0.002343 1gpu 0.007031 3 gpu
   STEPS: (13000, 17000)
   MAX_ITER: 20000
   AMP:

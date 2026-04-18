@@ -442,7 +442,6 @@ class HybridDataMapper(DatasetMapper):
         Returns:
             dict: a format that builtin models in detectron2 accept
         """
-        dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
         coco_data = []
         for sample in dataset_dict["coco_data"]:
             coco_data.append(self.coco_scale_mapper(sample))

@@ -1447,7 +1447,10 @@ class CombinedCameraHeads(ROIHeads):
         targets: Optional[List[Instances]] = None,
     ):
         losses = {}
-        horizon_targets = pitch_targets = roll_targets = vfov_targets = []
+        horizon_targets = []
+        pitch_targets = []
+        roll_targets = []
+        vfov_targets = []
         if self.training:
             assert targets, "'targets' argument is required during training"
             horizon_targets = [x["gt_horizon"] for x in targets]
