@@ -1,4 +1,6 @@
 # output dir
+slurmReports
+cuda-cache
 tmpdir
 pip-env-create.sh
 ddp.slurm
