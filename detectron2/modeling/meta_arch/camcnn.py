@@ -739,7 +739,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 self.reduce_method,
             )
             # Refining our latest prediction of camera height
-            camrcnn_data["yc_est"] += yc_est_batch_delta.unsqueeze(1)
+            camrcnn_data["yc_est"] = camrcnn_data["yc_est"] + yc_est_batch_delta.unsqueeze(1)
             # NOTE: Here we would have to measure the vt_loss once again to have the refine_layer vt_loss
             # But we would have to create a custom AMP / SimpleTrainer that don't sum them to the total loss
             # Unless we don't care about the total loss since we can .detach() it.
@@ -757,7 +757,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 self.reduce_method,
             )
             all_person_hs_delta = all_person_hs_delta.reshape(camrcnn_data["person_h"].shape)
-            camrcnn_data["person_h"] += all_person_hs_delta * mask
+            camrcnn_data["person_h"] = camrcnn_data["person_h"] + all_person_hs_delta * mask
             # NOTE: We would have to do the same as before for the person_h layer level loss
             height_loss = (
                 person_h_list_loss(
