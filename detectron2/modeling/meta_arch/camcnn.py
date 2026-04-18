@@ -797,7 +797,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         )
         del features, cam_proposals
         losses.update(cam_losses)
-        dt_logits = {k: v[:len(dt_inputs)] for k, v in cls_logits.items()}
+        dt_logits = {k: v[:len(dt_inputs)].detach() for k, v in cls_logits.items()}
         vfov_est, pitch_est, roll_est, horizon_est = self._get_camera_values(dt_logits)
         camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, "horizon_est": horizon_est}
         if self.height_on:
