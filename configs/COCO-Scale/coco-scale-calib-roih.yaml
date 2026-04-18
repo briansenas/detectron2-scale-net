@@ -13,7 +13,7 @@ MODEL:
   HEIGHT_ON: True
   HEIGHT_REFINE_ON: True
   HEIGHT_HEAD:
-    LOSS_WEIGHT: 0.00025  # The total batch size if 6 COCO 2 CALIB
+    LOSS_WEIGHT: 0.05
     REDUCE_METHOD: "softmax"
     SMOOTH_L1_BETA: 0.1
     DISCOUNT_FROM: "GT"
@@ -22,7 +22,7 @@ MODEL:
     TEMPERATURE: 0.75
     BN: True
     TRANSFORM: True
-    DETACH: True
+    DETACH: False
     REFINE_TEMPERATURE: 0.75
     REFINE_LAYERS: 2  # Only applies at HEIGHT_REFINE_ON: TRUE
 DATASETS:
