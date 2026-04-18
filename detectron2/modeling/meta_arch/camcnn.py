@@ -727,7 +727,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 self.reduce_method,
             )
             # Refining our latest prediction of camera height
-            camrcnn_data["yc_est"] += yc_est_batch_delta.unsqueeze(1)
+            camrcnn_data["yc_est"] = camrcnn_data["yc_est"] + yc_est_batch_delta.unsqueeze(1)
             # NOTE: Here we would have to measure the vt_loss once again to have the refine_layer vt_loss
             # But we would have to create a custom AMP / SimpleTrainer that don't sum them to the total loss
             # Unless we don't care about the total loss since we can .detach() it.
@@ -745,7 +745,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 self.reduce_method,
             )
             all_person_hs_delta = all_person_hs_delta.reshape(camrcnn_data["person_h"].shape)
-            camrcnn_data["person_h"] += all_person_hs_delta * mask
+            camrcnn_data["person_h"] = camrcnn_data["person_h"] + all_person_hs_delta * mask
             # NOTE: We would have to do the same as before for the person_h layer level loss
             height_loss = (
                 person_h_list_loss(
@@ -778,7 +778,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         all_inputs = dt_inputs + cam_inputs
         losses = {}
         images = self.preprocess_image(all_inputs)
-        cam_proposals = _add_whole_image_as_proposal(images, self.device)
         features = self.backbone(images.tensor)
         proposals, dt_losses = self._forward_generalized_rcnn(
             dt_inputs,
@@ -788,6 +787,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             ),
             {k: v[: len(dt_inputs)] for k, v in features.items()}
         )
+        cam_proposals = _add_whole_image_as_proposal(images, self.device)
         del images
         losses.update(dt_losses)
         cls_logits, cam_losses = self._forward_camrcnn(
@@ -795,7 +795,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             features,
             cam_proposals
         )
-        del features
+        del features, cam_proposals
         losses.update(cam_losses)
         dt_logits = {k: v[:len(dt_inputs)] for k, v in cls_logits.items()}
         vfov_est, pitch_est, roll_est, horizon_est = self._get_camera_values(dt_logits)
