@@ -1,4 +1,8 @@
 # output dir
+tmpdir
+pip-env-create.sh
+ddp.slurm
+.d2-scale
 output
 instant_test_output
 inference_test_output
