@@ -414,15 +414,16 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             [inst.image_size[0] for inst in predicted_proposals],
             device=self.device
         )  # [B]
-        gt_boxes_list = [inst.gt_boxes.tensor for inst in predicted_proposals]
+        gt_boxes_list = [inst.gt_boxes.tensor if self.training else inst.pred_boxes.tensor for inst in predicted_proposals]
         pred_height_list = [inst.pred_height for inst in predicted_proposals]
         # Padding
         gt_boxes_pad, _ = pad_to_max(gt_boxes_list, self.device, self.padded_input_size)
-        gt_mask_list = [inst.valid_mask for inst in predicted_proposals]
+        gt_mask_list = [inst.valid_mask if self.training else torch.ones(
+            (len(predicted_proposals)), device=self.device) for inst in predicted_proposals]
         gt_mask_pad, _ = pad_to_max(gt_mask_list, self.device, self.padded_input_size)
         mask = gt_mask_pad
         pred_height_pad, _ = pad_to_max(pred_height_list, self.device, self.padded_input_size)
-        if self.discount_from == "GT":
+        if self.discount_from == "GT" and self.training:
             # NOTE: for multi-cat I would've to filter for only class 0 (person)
             straighten_ratio_kps_list = [inst.gt_keypoints.tensor for inst in predicted_proposals]
         else:
@@ -560,6 +561,43 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             )
 
         return visualizer
+
+    def visualize_prediction(self, batched_inputs, instances, camrcnn_data: dict):
+        from detectron2.utils.visualizer import Visualizer
+        max_vis_prop = 10
+        vfov_est, pitch_est = camrcnn_data["vfov_est"], camrcnn_data["pitch_est"]
+        roll_est, horizon_est = camrcnn_data["roll_est"], camrcnn_data["horizon_est"]
+        images = []
+        for i, (input, prop) in enumerate(zip(batched_inputs, instances)):
+            img = input["image"]
+            img = convert_image_to_rgb(img.permute(1, 2, 0), self.input_format)
+            box_size = min(len(prop.pred_boxes), max_vis_prop)
+            v_pred = Visualizer(img, metadata=None)
+            v_pred.overlay_instances(
+                boxes=prop.pred_boxes[0:box_size].tensor.cpu().numpy(),
+                keypoints=prop.pred_keypoints[0:box_size].detach().cpu().numpy() if self.height_on else None,
+                labels=(prop.pred_height[0: box_size] * camrcnn_data["straighten_ratio"][i][0:box_size]
+                        ).detach().cpu().numpy() if self.height_on else None,
+            )
+            texts = {}
+            texts["vfov"] = vfov_est[i]
+            texts["pitch"] = pitch_est[i]
+            texts["roll"] = roll_est[i]
+            texts["horizon"] = horizon_est[i]
+            if self.height_on:
+                texts["yc_estCam"] = camrcnn_data["yc_est"][i][0]
+            v_pred = self._draw_labels(
+                v_pred,
+                texts,
+            )
+            prop_img, _ = showHorizonLine(
+                v_pred.get_output().get_image(),
+                vfov_est[i].detach().cpu().numpy(),
+                -pitch_est[i].detach().cpu().numpy(),
+                roll_est[i].detach().cpu().numpy(),
+            )
+            images.append(prop_img)
+        return images
 
     def visualize_training(self, batched_inputs, proposals, camrcnn_data: Optional[dict] = None):
         """Basically the same as the GeneralizedRCNN method"""
@@ -851,9 +889,24 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         if do_postprocess:
             assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
             results = GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
-
-        cam_results, _ = self.camera_heads(images, features, _add_whole_image_as_proposal(images, self.device), None)
-        return {**results, **cam_results}
+            results = [x["instances"] for x in results]
+        cam_logits, _ = self.camera_heads(features, _add_whole_image_as_proposal(images, self.device), None)
+        vfov_est, pitch_est, roll_est, horizon_est = self._get_camera_values(cam_logits)
+        camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, "horizon_est": horizon_est}
+        if self.height_on:
+            camrcnn_data, _ = self._camrcnn_predictions(
+                results,
+                camrcnn_data,
+            )
+            if self.height_refine_on and camrcnn_data:
+                camrcnn_data, _ = self._camrcnn_refine(
+                    camrcnn_data,
+                )
+                camrcnn_data, _ = self._camrcnn_predictions(
+                    results,
+                    camrcnn_data,
+                )
+        return results, camrcnn_data
 
     def visualize_training_camrcnn(self, batched_inputs, proposals):
         """

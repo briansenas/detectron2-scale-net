@@ -1197,10 +1197,13 @@ class HeightStandardROIHeads(StandardROIHeads):
                 losses.update(keypoint_losses)
             return proposals, losses
         else:
-            pred_instances, _ = self._forward_box(features, proposals)
+            if self.height_on:
+                pred_instances, _ = self._forward_box_height(features, proposals)
+            else:
+                pred_instances = self._forward_box(features, proposals)
             # During inference cascaded prediction is used: the mask and keypoints heads are only
             # applied to the top scoring box detections.
-            pred_instances = self.forward_with_given_boxes(features, pred_instances)
+            pred_instances, _ = self._forward_keypoint_height(features, pred_instances)
             return pred_instances, {}
 
     def _forward_box_height(
