@@ -417,12 +417,13 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         gt_boxes_list = [inst.gt_boxes.tensor if self.training else inst.pred_boxes.tensor for inst in predicted_proposals]
         pred_height_list = [inst.pred_height for inst in predicted_proposals]
         # Padding
-        gt_boxes_pad, _ = pad_to_max(gt_boxes_list, self.device, self.padded_input_size)
+        pad_to_size = self.padded_input_size if self.training else max([x.shape[0] for x in gt_boxes_list])
+        gt_boxes_pad, _ = pad_to_max(gt_boxes_list, self.device, pad_to_size)
         gt_mask_list = [inst.valid_mask if self.training else torch.ones(
             (len(predicted_proposals)), device=self.device) for inst in predicted_proposals]
-        gt_mask_pad, _ = pad_to_max(gt_mask_list, self.device, self.padded_input_size)
+        gt_mask_pad, _ = pad_to_max(gt_mask_list, self.device, pad_to_size)
         mask = gt_mask_pad
-        pred_height_pad, _ = pad_to_max(pred_height_list, self.device, self.padded_input_size)
+        pred_height_pad, _ = pad_to_max(pred_height_list, self.device, pad_to_size)
         if self.discount_from == "GT" and self.training:
             # NOTE: for multi-cat I would've to filter for only class 0 (person)
             straighten_ratio_kps_list = [inst.gt_keypoints.tensor for inst in predicted_proposals]
@@ -440,7 +441,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 for keypoints in straighten_ratio_kps_list
             ],
             self.device,
-            self.padded_input_size,
+            pad_to_size,
             1.0,
         )
 
@@ -466,15 +467,15 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         bbox_y1y2_offset = gt_boxes_pad[:, :, [1, 3]] - (H - v0_pred).unsqueeze(-1)  # [top 0 , bottom H]
         bboxes_offset_norm = (
             torch.cat((gt_boxes_pad, bbox_y1y2_offset), 2) / H.unsqueeze(-1) - 0.5
-        ).view(gt_boxes_pad.shape[0], self.padded_input_size, -1) * mask.unsqueeze(2)
+        ).view(gt_boxes_pad.shape[0], pad_to_size, -1) * mask.unsqueeze(2)
         if "yc_est" in camrcnn_data:
             yc_est = camrcnn_data["yc_est"]
         else:
-            vt_01_est = ((H - v0_pred) / H).view(-1, 1, 1).repeat(1, self.padded_input_size, 1)
+            vt_01_est = ((H - v0_pred) / H).view(-1, 1, 1).repeat(1, pad_to_size, 1)
             person_h_norm = (pred_height_pad / self.roi_heads.height_mean -
-                             1).view(gt_boxes_pad.shape[0], self.padded_input_size, -1)
+                             1).view(gt_boxes_pad.shape[0], pad_to_size, -1)
             person_h_discount_norm = (h_human_s / self.roi_heads.height_mean -
-                                      1).view(gt_boxes_pad.shape[0], self.padded_input_size, -1)
+                                      1).view(gt_boxes_pad.shape[0], pad_to_size, -1)
             input_list = [
                 vt_01_est,
                 bboxes_offset_norm,
@@ -738,15 +739,15 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         eps = 1e-6
         losses = []
         v0_01_batch_est = ((camrcnn_data['H'] - camrcnn_data['v0_pred']) /
-                           camrcnn_data['H']).view(-1, 1, 1).repeat(1, self.padded_input_size, 1)
+                           camrcnn_data['H']).view(-1, 1, 1).repeat(1, camrcnn_data["person_h"].shape[1], 1)
         # NOTE: In the original SVMIW he saves intermediate states before each refine to have the vt_loss (due to new yc)
         # as well as, the person_h at every layer
         for layer_idx in range(self.point_net_refine_layers):
             h_human_s = camrcnn_data["person_h"] * camrcnn_data["straighten_ratio"]
             person_h_norm = (camrcnn_data["person_h"] / self.roi_heads.height_mean -
-                             1).view(camrcnn_data["person_h"].shape[0], self.padded_input_size, -1)
+                             1).view(*camrcnn_data["person_h"].shape[:2], -1)
             person_h_discount_norm = (h_human_s / self.roi_heads.height_mean -
-                                      1).view(camrcnn_data["person_h"].shape[0], self.padded_input_size, -1)
+                                      1).view(*camrcnn_data["person_h"].shape[:2], -1)
             input_list = [v0_01_batch_est, camrcnn_data["bboxes_offset_norm"],
                           camrcnn_data["yc_est_delta"].unsqueeze(-1), person_h_norm, person_h_discount_norm]
             input_list = [x * mask.unsqueeze(2) for x in input_list]
@@ -790,7 +791,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                     camrcnn_data["person_h"],
                     self.roi_heads.height_mean,
                     self.roi_heads.height_std,
-                    self.padded_input_size
+                    camrcnn_data["person_h"].shape[1]
                 ) *
                 mask *
                 self.height_loss_weight
