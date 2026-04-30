@@ -447,7 +447,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             pad_to_size,
             1.0,
         )
-
         H = H_batch.unsqueeze(1)
 
         vfov = vfov_est.unsqueeze(1)
@@ -465,7 +464,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
 
         # Discount from predicted keypoints.
         h_human_s = (pred_height_pad * straighten_discount_ratio) * mask
-        eps = 1e-6
+        eps = torch.finfo(h_human_s.dtype).eps  # approx 9.77e-4 for FP16
 
         bbox_y1y2_offset = gt_boxes_pad[:, :, [1, 3]] - (H - v0_pred).unsqueeze(-1)  # [top 0 , bottom H]
         bboxes_offset_norm = (

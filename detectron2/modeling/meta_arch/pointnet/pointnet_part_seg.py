@@ -313,10 +313,11 @@ class CamHPersonHPointNet(nn.Module):
         self.init_weights()
 
     def _max_pool(self, x: torch.Tensor, mask: torch.Tensor):
-        return torch.max(x.masked_fill(mask == 0, torch.finfo(x.dtype).min), 2)[0]
+        return torch.max(x.masked_fill(mask == 0, -1e4), 2)[0]
 
     def _avg_pool(self, x: torch.Tensor, mask: torch.Tensor):
-        return (x * mask).sum(dim=2) / (mask.sum(dim=2) + 1e-6)
+        eps = torch.finfo(x.dtype).eps  # approx 9.77e-4 for FP16
+        return (x * mask).sum(dim=2) / (mask.sum(dim=2) + eps)
 
     def _hybrid_pool(self, x: torch.Tensor, mask: torch.Tensor):
         return torch.concat([
