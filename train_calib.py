@@ -19,8 +19,8 @@ import os
 from pathlib import Path
 
 torch.autograd.set_detect_anomaly(True)
-torch.multiprocessing.set_sharing_strategy("file_system")
-# torch.multiprocessing.set_sharing_strategy("file_descriptor")
+# torch.multiprocessing.set_sharing_strategy("file_system")
+torch.multiprocessing.set_sharing_strategy("file_descriptor")
 
 # Better CUDA memory usage
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = (

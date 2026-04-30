@@ -156,10 +156,10 @@ class CameraRCNN(nn.Module):
         if "logits" in batched_inputs[0]:
             gt_instances = [
                 dict(
-                    gt_horizon=x["logits"]["gt_horizon"].to(self.device),
-                    gt_pitch=x["logits"]["gt_pitch"].to(self.device),
-                    gt_roll=x["logits"]["gt_roll"].to(self.device),
-                    gt_vfov=x["logits"]["gt_vfov"].to(self.device),
+                    gt_horizon=x["logits"]["gt_horizon"],
+                    gt_pitch=x["logits"]["gt_pitch"],
+                    gt_roll=x["logits"]["gt_roll"],
+                    gt_vfov=x["logits"]["gt_vfov"],
                 )
                 for x in batched_inputs
             ]
@@ -193,7 +193,7 @@ class CameraRCNN(nn.Module):
             Otherwise, a list[Instances] containing raw network outputs.
         """
         assert not self.training
-        batched_inputs = _move_logits_to_device(batched_inputs, self.device)
+        # batched_inputs = _move_logits_to_device(batched_inputs, self.device)
         images = self.preprocess_image(batched_inputs)
         features = self.backbone(images.tensor)
         proposals = _add_whole_image_as_proposal(images, self.device)
@@ -220,9 +220,12 @@ class CameraRCNN(nn.Module):
         pitch = bins2pitch(pitch_logits)
         roll = bins2roll(roll_logits)
         vfov = bins2vfov(vfov_logits)
-        gt_pitch = bins2pitch(input["logits"]["gt_pitch"])
-        gt_roll = bins2roll(input["logits"]["gt_roll"])
-        gt_vfov = bins2vfov(input["logits"]["gt_vfov"])
+        gt_pitch = bins2pitch(nn.functional.one_hot(torch.as_tensor(
+            input["logits"]["gt_pitch"]), num_classes=len(pitch_logits)).float())
+        gt_roll = bins2roll(nn.functional.one_hot(torch.as_tensor(
+            input["logits"]["gt_roll"]), num_classes=len(roll_logits)).float())
+        gt_vfov = bins2vfov(nn.functional.one_hot(torch.as_tensor(
+            input["logits"]["gt_vfov"]), num_classes=len(vfov_logits)).float())
         anno_img, _ = showHorizonLine(img, gt_vfov, gt_pitch, gt_roll)
         prop_img, _ = showHorizonLine(img, vfov, pitch, roll)
         vis_img = np.concatenate((anno_img, prop_img), axis=1)
@@ -607,6 +610,8 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         storage = get_event_storage()
         max_vis_prop = 10
         metadata = MetadataCatalog.get("COCOScale2017Calib_train")
+        if not self.height_on:
+            return super().visualize_training(batched_inputs, proposals)
         if not camrcnn_data:
             return
         vfov_est, pitch_est = camrcnn_data["vfov_est"], camrcnn_data["pitch_est"]
@@ -702,10 +707,10 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
     def _forward_camrcnn(self, batched_inputs: List[Dict[str, torch.Tensor]], features, proposals):
         gt_instances = [
             dict(
-                gt_horizon=x["logits"]["gt_horizon"].to(self.device),
-                gt_pitch=x["logits"]["gt_pitch"].to(self.device),
-                gt_roll=x["logits"]["gt_roll"].to(self.device),
-                gt_vfov=x["logits"]["gt_vfov"].to(self.device),
+                gt_horizon=x["logits"]["gt_horizon"],
+                gt_pitch=x["logits"]["gt_pitch"],
+                gt_roll=x["logits"]["gt_roll"],
+                gt_vfov=x["logits"]["gt_vfov"],
             )
             if "logits" in x else {}
             for x in batched_inputs
@@ -733,7 +738,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         for input in batched_inputs:
             dt_inputs += input["coco_data"]
             cam_inputs += input["calib_data"]
-        cam_inputs = _move_logits_to_device(cam_inputs, self.device)
+        # cam_inputs = _move_logits_to_device(cam_inputs, self.device)
         return dt_inputs, cam_inputs
 
     def _camrcnn_refine(self, camrcnn_data):
@@ -936,10 +941,14 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         roll = bins2roll(roll_logits)
         vfov = bins2vfov(vfov_logits)
         horizon = bins2horizon(horizon_logits)
-        gt_pitch = bins2pitch(input["logits"]["gt_pitch"].detach().cpu().numpy().squeeze())
-        gt_roll = bins2roll(input["logits"]["gt_roll"].detach().cpu().numpy().squeeze())
-        gt_vfov = bins2vfov(input["logits"]["gt_vfov"].detach().cpu().numpy().squeeze())
-        gt_horizon = bins2horizon(input["logits"]["gt_horizon"].detach().cpu().numpy().squeeze())
+        gt_pitch = bins2pitch(nn.functional.one_hot(torch.as_tensor(
+            input["logits"]["gt_pitch"]), num_classes=len(pitch_logits)).float())
+        gt_roll = bins2roll(nn.functional.one_hot(torch.as_tensor(
+            input["logits"]["gt_roll"]), num_classes=len(roll_logits)).float())
+        gt_vfov = bins2vfov(nn.functional.one_hot(torch.as_tensor(
+            input["logits"]["gt_vfov"]), num_classes=len(vfov_logits)).float())
+        gt_horizon = bins2horizon(nn.functional.one_hot(torch.as_tensor(
+            input["logits"]["gt_horizon"]), num_classes=len(horizon_logits)).float())
         anno_img, _ = showHorizonLine(img, gt_vfov, gt_pitch, gt_roll)
         prop_img, _ = showHorizonLine(img, vfov, pitch, roll)
         v_gt = Visualizer(anno_img, None)

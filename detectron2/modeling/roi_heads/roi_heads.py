@@ -1395,7 +1395,8 @@ class CameraHead(ROIHeads):
 
     def compute_loss(self, logits, targets):
         assert targets, "'targets' argument is required during training"
-        targets = torch.stack(targets)
+        targets = torch.stack([nn.functional.one_hot(torch.as_tensor(x), num_classes=256).float()
+                              for x in targets]).to(logits.device)
         return nn.functional.kl_div(
             nn.functional.log_softmax(logits, dim=1),
             targets,

@@ -206,18 +206,6 @@ class CalibDataset:
         pitch_idx = np.digitize(pitch, pitch_bins)
         roll_idx = np.digitize(roll, roll_bins)
         vfov_idx = np.digitize(vfov, vfov_bins)
-        horizon_gt = np.zeros((256,), dtype=np.float32)
-        pitch_gt = np.zeros((256,), dtype=np.float32)
-        roll_gt = np.zeros((256,), dtype=np.float32)
-        vfov_gt = np.zeros((256,), dtype=np.float32)
-        horizon_gt[horizon_idx] = 1.0
-        pitch_gt[pitch_idx] = 1.0
-        roll_gt[roll_idx] = 1.0
-        vfov_gt[vfov_idx] = 1.0
-        horizon_gt, pitch_gt, roll_gt, vfov_gt = map(
-            torch.from_numpy,
-            (horizon_gt, pitch_gt, roll_gt, vfov_gt),
-        )
         return dict(
             source="pano360",
             file_name=im_path,
@@ -229,10 +217,10 @@ class CalibDataset:
             vfov=vfov,
             focal_length_35mm_eq=focal_length_35mm_eq,
             logits=dict(
-                gt_horizon=horizon_gt,
-                gt_pitch=pitch_gt,
-                gt_roll=roll_gt,
-                gt_vfov=vfov_gt,
+                gt_horizon=horizon_idx,
+                gt_pitch=pitch_idx,
+                gt_roll=roll_idx,
+                gt_vfov=vfov_idx,
             ),
         )
 
