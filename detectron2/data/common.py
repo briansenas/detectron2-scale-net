@@ -1,19 +1,21 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-import contextlib
-import copy
-import itertools
-import logging
 import numpy as np
-import pickle
-import random
-from typing import Callable, Union
 import torch
 import torch.utils.data as data
 from torch.utils.data.sampler import Sampler
 
 from detectron2.utils.serialize import PicklableWrapper
 
-__all__ = ["MapDataset", "DatasetFromList", "AspectRatioGroupedDataset", "ToIterableDataset"]
+import contextlib
+import copy
+import itertools
+import logging
+import pickle
+import random
+from typing import Callable, Optional, Union
+
+__all__ = ["MapDataset", "DatasetFromList", "AspectRatioGroupedDataset",
+           "AspectRatioGroupedMultipleDataset", "ToIterableDataset"]
 
 logger = logging.getLogger(__name__)
 
@@ -337,3 +339,93 @@ class AspectRatioGroupedDataset(data.IterableDataset):
                 # guaranteed to execute
                 del bucket[:]
                 yield data
+
+
+class AspectRatioGroupedMultipleDataset(data.IterableDataset):
+    def __init__(self, datasets, ratios, keys: Optional[list] = None):
+        """
+        Args:
+            dataset: an iterable. Each element must be a dict with keys
+                "width" and "height", which will be used to batch data.
+            batch_size (int):
+        """
+        self.datasets = datasets
+        self.ratios = ratios
+        self.keys = keys or [f"dataset_{i}" for i, _ in enumerate(datasets)]
+        self._buckets = {}
+        self._ratio = {}
+        self.max_wait = sum(self.ratios) + max(self.ratios)
+        for i, k in enumerate(self.keys):
+            self._buckets[k] = [[] for _ in range(2)]
+            self._ratio[k] = self.ratios[i]
+
+    def __iter__(self):
+        def _check_bucket(d, k):
+            w, h = d["width"], d["height"]
+            bucket_id = 0 if w > h else 1
+            bucket = self._buckets[k][bucket_id]
+            bucket.append(d)
+            if len(bucket) >= self._ratio[k]:
+                batch = bucket[:self._ratio[k]]
+                del bucket[:self._ratio[k]]
+                return bucket_id, batch
+
+            return None, None
+
+        iterators = {k: iter(dataset) for k, dataset in zip(self.keys, self.datasets)}
+        ready_flags = {k: None for k in self.keys}
+        ready = {0: {}, 1: {}}
+        wait = 0
+        while True:
+            for k in self.keys:
+                if not ready_flags[k]:
+                    sample = next(iterators[k])
+                    bucket_id, batch = _check_bucket(sample, k)
+                    if batch is not None:
+                        ready[bucket_id][k] = batch
+                        ready_flags[k] = bucket_id
+            # Check whether any grouping is ready:
+            for b in [0, 1]:
+                if len(ready[b]) == len(self.keys):
+                    data = ready[b].copy()
+                    ready[b] = {}
+                    ready_flags = {k: None for k in self.keys}
+                    wait = 0
+                    yield data
+                    break
+            else:
+                wait += 1
+                if wait >= self.max_wait:
+                    temp_merged = {}
+                    temp_remaining = {}
+
+                    # First pass: check feasibility WITHOUT mutating real buckets
+                    for k in self.keys:
+                        bucket0 = self._buckets[k][0]
+                        bucket1 = self._buckets[k][1]
+                        combined = bucket0 + bucket1
+
+                        need = self._ratio[k]
+
+                        if len(combined) < need:
+                            break  # Abort: not all keys can be satisfied
+
+                        temp_merged[k] = combined[:need]
+                        temp_remaining[k] = combined[need:]
+                    else:
+                        # Second pass: commit changes only if ALL keys are valid
+                        ready = {0: {}, 1: {}}
+                        ready_flags = {}
+                        for k in self.keys:
+                            self._buckets[k][0].clear()
+                            self._buckets[k][1].clear()
+
+                            # Re-bucket remaining samples
+                            for d in temp_remaining[k]:
+                                bucket_id, batch = _check_bucket(d, k)
+                                if batch is not None:
+                                    ready[bucket_id][k] = batch
+                                    ready_flags[k] = bucket_id
+
+                        wait = 0
+                        yield temp_merged

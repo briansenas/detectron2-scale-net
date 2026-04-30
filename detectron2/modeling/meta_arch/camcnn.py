@@ -728,6 +728,8 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
     def _parse_dt_cam_inputs(self, batched_inputs):
         dt_inputs = []
         cam_inputs = []
+        if not isinstance(batched_inputs, List):  # For AspectRatioGroupedMultipleDataset
+            batched_inputs = [batched_inputs]
         for input in batched_inputs:
             dt_inputs += input["coco_data"]
             cam_inputs += input["calib_data"]

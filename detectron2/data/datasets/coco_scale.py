@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from PIL import Image
 from scipy.io import loadmat
 
 from detectron2.data.datasets.coco import load_coco_json
@@ -124,7 +125,9 @@ class COCOScale2017Calib(torch.utils.data.Dataset):
         self.coco_samples_size, self.calib_sample_size = ratio
 
     def __len__(self):
-        return self.coco_len
+        # This is to loop over the smallets one
+        # Effects the epoch_value.
+        return max(self.coco_len, self.calib_len)
 
     def __getitem__(self, idx):
         coco_idx = [

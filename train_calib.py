@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 
 from detectron2.config import get_cfg
@@ -17,15 +16,11 @@ from detectron2.engine import (
 )
 
 import os
-import random
 from pathlib import Path
 
 torch.autograd.set_detect_anomaly(True)
-torch.multiprocessing.set_sharing_strategy("file_descriptor")
-seed = 140421
-random.seed(seed)
-np.random.seed(seed)
-torch.manual_seed(seed)
+torch.multiprocessing.set_sharing_strategy("file_system")
+# torch.multiprocessing.set_sharing_strategy("file_descriptor")
 
 # Better CUDA memory usage
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = (
@@ -135,7 +130,6 @@ def build_args():
     parser.add_argument(
         "--resume-from-filter-name",
         type=str,
-        default="camera_head",
         help="Filter state dict for weights containing this key.",
     )
     return parser.parse_args()
@@ -180,7 +174,6 @@ def main(args):
     if args.resume_from:
         print(f"Resuming from previous experiment: {args.resume_from}")
         model = trainer.model
-        exp_weights_path = f"./output/{args.resume_from}"
 
         def load_state_dict(exp_weights_path):
             checkpoint = torch.load(exp_weights_path, map_location="cpu")
@@ -188,14 +181,15 @@ def main(args):
             state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
             return state_dict
 
-        calib_state_dict = load_state_dict(exp_weights_path)
+        calib_state_dict = load_state_dict(args.resume_from)
         coco_state_dict = load_state_dict(cfg.MODEL.WEIGHTS)
-        # Filter only camera_head weights
-        calib_state_dict = {
-            k: v
-            for k, v in calib_state_dict.items()
-            if args.resume_from_filter_name in k
-        }
+        if args.resume_from_filter_name:
+            # Filter only camera_head weights
+            calib_state_dict = {
+                k: v
+                for k, v in calib_state_dict.items()
+                if args.resume_from_filter_name in k
+            }
         # Merge both state dicts to have the full state dict to load. Make sure the argument is filtered.
         coco_state_dict.update(calib_state_dict)
         # Load into trainer.model

@@ -1381,7 +1381,6 @@ class CameraHead(ROIHeads):
         self,
         features: Dict[str, torch.Tensor],
         proposals: List[Instances],
-        targets: Optional[List[np.int64]] = None,
     ) -> Tuple[List[Instances], Dict[str, torch.Tensor]]:
         """
         See :class:`ROIHeads.forward`.
@@ -1475,9 +1474,12 @@ class CombinedCameraHeads(ROIHeads):
         losses = {}
         if self.training:
             assert targets, "'targets' argument is required during training"
+            # If the x value has gt_horizon, it also has all the other gt unless dataset mapper is changed (which is not)
             idxs = [i for i, x in enumerate(targets) if "gt_horizon" in x]
+            assert len(idxs) > 0, "there are not gt camera parameters in targets"
             horizon_loss = self.classifier_horizon.compute_loss(
                 horizon_logits[idxs],
+                # Targets don't allow idx slicing but is aligned by using the same list comprehension
                 [x["gt_horizon"] for x in targets if "gt_horizon" in x],
             )
             pitch_loss = self.classifier_pitch.compute_loss(
