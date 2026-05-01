@@ -6,12 +6,12 @@ from torch import nn
 from detectron2.config import configurable
 from detectron2.data import MetadataCatalog
 from detectron2.data.datasets.pano360 import (
+    COCO_SCALE_STATS,
     bins2horizon,
     bins2pitch,
     bins2roll,
     bins2vfov,
     horizon_bins_centers,
-    human_bins_layers_list,
     pitch_bins_centers,
     roll_bins_centers,
     showHorizonLine,
@@ -20,7 +20,6 @@ from detectron2.data.datasets.pano360 import (
 )
 from detectron2.data.detection_utils import (
     _add_whole_image_as_proposal,
-    _move_logits_to_device,
     accu_model_batch,
     convert_image_to_rgb,
     get_straighten_ratio_from_kps,
@@ -253,7 +252,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         vfov_bins_center: torch.tensor,
         roll_bins_center: torch.tensor,
         yc_bins_centers_list: Optional[List[torch.tensor]] = None,
-        human_height_centers_list: Optional[List[torch.tensor]] = None,
+        class_height_centers_list: Optional[List[torch.tensor]] = None,
         point_net: Optional[nn.Module] = None,
         point_net_temperature: float = 1.0,
         point_net_detach: bool = True,
@@ -309,7 +308,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         self.height_refine_on = point_net_refine is not None
         if self.height_on:
             self.register_buffer("yc_bins_centers_list", yc_bins_centers_list)
-            self.register_buffer("human_height_centers_list", human_height_centers_list)
+            self.register_buffer("class_height_centers_list", class_height_centers_list)
 
     @classmethod
     def from_config(cls, cfg):
@@ -338,8 +337,11 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             ret["height_loss_weight"] = cfg.MODEL.HEIGHT_HEAD.LOSS_WEIGHT
             ret["yc_bins_centers_list"] = torch.stack(
                 [torch.from_numpy(yc_bins_layer).float() for yc_bins_layer in yc_bins_layers_list])
-            ret["human_height_centers_list"] = torch.stack(
-                [torch.from_numpy(human_bins_layer).float() for human_bins_layer in human_bins_layers_list])
+            all_class_bins = []
+            for entry in COCO_SCALE_STATS:
+                class_layer_stack = torch.stack([torch.as_tensor(l).float() for l in entry["layer_list"]])
+                all_class_bins.append(class_layer_stack)
+            ret["class_height_centers_list"] = torch.stack(all_class_bins)
             ret["point_net"] = CamHPointNet(
                 in_channels=9,
                 out_channels=cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES,
@@ -419,9 +421,12 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         )  # [B]
         gt_boxes_list = [inst.gt_boxes.tensor if self.training else inst.pred_boxes.tensor for inst in predicted_proposals]
         pred_height_list = [inst.pred_height for inst in predicted_proposals]
+        gt_classes_list = [
+            inst.gt_classes if self.training else inst.pred_classes.tensor for inst in predicted_proposals]
         # Padding
         pad_to_size = self.padded_input_size if self.training else max([x.shape[0] for x in gt_boxes_list])
         gt_boxes_pad, _ = pad_to_max(gt_boxes_list, self.device, pad_to_size)
+        gt_classes_pad, _ = pad_to_max(gt_classes_list, self.device, pad_to_size)
         gt_mask_list = [inst.valid_mask if self.training else torch.ones(
             (len(predicted_proposals)), device=self.device) for inst in predicted_proposals]
         gt_mask_pad, _ = pad_to_max(gt_mask_list, self.device, pad_to_size)
@@ -474,9 +479,9 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             yc_est = camrcnn_data["yc_est"]
         else:
             vt_01_est = ((H - v0_pred) / H).view(-1, 1, 1).repeat(1, pad_to_size, 1)
-            person_h_norm = (pred_height_pad / self.roi_heads.height_mean -
+            person_h_norm = (pred_height_pad / self.roi_heads.class_means[gt_classes_pad] -
                              1).view(gt_boxes_pad.shape[0], pad_to_size, -1)
-            person_h_discount_norm = (h_human_s / self.roi_heads.height_mean -
+            person_h_discount_norm = (h_human_s / self.roi_heads.class_means[gt_classes_pad] -
                                       1).view(gt_boxes_pad.shape[0], pad_to_size, -1)
             input_list = [
                 vt_01_est,
@@ -522,11 +527,11 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         # Per-instance mean
         vt_loss = (loss.sum(dim=1) / (mask.sum(dim=1) + eps)).mean()
         losses = {"vt_loss": vt_loss}
-        # with torch.no_grad():
-        #     denominator = (vt - vb) * (1.0 + (vc - v0_pred) * (vc - vt) / f_estim ** 2)
-        #     yc_implied = h_human_s * (v0_pred - vb) / (denominator + eps)
-        # loss_consistency = torch.mean((yc_est.detach() - yc_implied)**2 * mask)
-        # losses.update({"consistency_loss": loss_consistency})
+        with torch.no_grad():
+            denominator = (vt - vb) * (1.0 + (vc - v0_pred) * (vc - vt) / f_estim ** 2)
+            yc_implied = h_human_s * (v0_pred - vb) / (denominator + eps)
+        loss_consistency = torch.mean((yc_est.detach() - yc_implied)**2 * mask)
+        losses.update({"consistency_loss": loss_consistency})
         camrcnn_data = {
             "valid_mask": valid_mask,
             "mask": mask,
@@ -535,6 +540,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             "yc_est_delta": vt_camEst_batch,
             "v0_pred": v0_pred,
             "vt_camEst_N": vt_camEst_N,
+            "gt_classes_pad": gt_classes_pad,
             "person_h": pred_height_pad,
             "straighten_ratio": straighten_discount_ratio,
             "bboxes_offset_norm": bboxes_offset_norm,
@@ -746,13 +752,14 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         losses = []
         v0_01_batch_est = ((camrcnn_data['H'] - camrcnn_data['v0_pred']) /
                            camrcnn_data['H']).view(-1, 1, 1).repeat(1, camrcnn_data["person_h"].shape[1], 1)
+        gt_classes_pad = camrcnn_data["gt_classes_pad"]
         # NOTE: In the original SVMIW he saves intermediate states before each refine to have the vt_loss (due to new yc)
         # as well as, the person_h at every layer
         for layer_idx in range(self.point_net_refine_layers):
             h_human_s = camrcnn_data["person_h"] * camrcnn_data["straighten_ratio"]
-            person_h_norm = (camrcnn_data["person_h"] / self.roi_heads.height_mean -
+            person_h_norm = (camrcnn_data["person_h"] / self.roi_heads.class_means[gt_classes_pad] -
                              1).view(*camrcnn_data["person_h"].shape[:2], -1)
-            person_h_discount_norm = (h_human_s / self.roi_heads.height_mean -
+            person_h_discount_norm = (h_human_s / self.roi_heads.class_means[gt_classes_pad] -
                                       1).view(*camrcnn_data["person_h"].shape[:2], -1)
             input_list = [v0_01_batch_est, camrcnn_data["bboxes_offset_norm"],
                           camrcnn_data["yc_est_delta"].unsqueeze(-1), person_h_norm, person_h_discount_norm]
@@ -786,7 +793,8 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 personH_cls_logits_delta.reshape(
                     -1, personH_cls_logits_delta.shape[-1]
                 ) / self.point_net_refine_temperature,
-                self.human_height_centers_list[layer_idx + 1],
+                self.class_height_centers_list[gt_classes_pad, layer_idx +
+                                               1].reshape(-1, personH_cls_logits_delta.shape[-1]),
                 self.reduce_method,
             )
             all_person_hs_delta = all_person_hs_delta.reshape(camrcnn_data["person_h"].shape)
@@ -795,8 +803,8 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             height_loss = (
                 person_h_list_loss(
                     camrcnn_data["person_h"],
-                    self.roi_heads.height_mean,
-                    self.roi_heads.height_std,
+                    self.roi_heads.class_means[gt_classes_pad],
+                    self.roi_heads.class_stds[gt_classes_pad],
                     camrcnn_data["person_h"].shape[1]
                 ) *
                 mask *

@@ -861,7 +861,7 @@ def pad_to_max(tensor_list, device, max_n, pad_value=0.0):
 
 
 def human_prior(tensor, height_mean, height_std, ):
-    return 1. / np.sqrt(2. * np.pi * (height_std**2)) * torch.exp(-(tensor - height_mean)**2 / (2. * height_std**2))
+    return 1. / torch.sqrt(2. * torch.pi * (height_std**2)) * torch.exp(-(tensor - height_mean)**2 / (2. * height_std**2))
 
 
 def person_h_list_loss(all_person_hs, height_mean, height_std, num_instances):

@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from detectron2.config import configurable
-from detectron2.data.datasets.pano360 import human_bins
+from detectron2.data.datasets.pano360 import COCO_SCALE_STATS
 from detectron2.data.detection_utils import person_h_list_loss, prob_to_est
 from detectron2.layers import ShapeSpec, nonzero_tuple
 from detectron2.structures import Boxes, ImageList, Instances, Keypoints, pairwise_iou
@@ -974,8 +974,9 @@ class HeightStandardROIHeads(StandardROIHeads):
         padded_input_size: int = 10,
         height_predictor: Optional[nn.Module] = None,
         height_cls_score: Optional[nn.Module] = None,
-        height_mean: Optional[float] = None,
-        height_std: Optional[float] = None,
+        class_means: Optional[torch.tensor] = None,
+        class_stds: Optional[torch.tensor] = None,
+        class_bins: Optional[torch.tensor] = None,
         **kwargs,
     ):
         super().__init__(
@@ -996,10 +997,9 @@ class HeightStandardROIHeads(StandardROIHeads):
         self.height_on = height_predictor is not None
         self.height_predictor = height_predictor
         self.height_cls_score = height_cls_score
-        self.height_mean = height_mean
-        self.height_std = height_std
-        if height_mean:
-            self.register_buffer("human_bins", torch.as_tensor(human_bins))
+        self.register_buffer("class_means", class_means)
+        self.register_buffer("class_stds", class_stds)
+        self.register_buffer("class_bins", class_bins)
 
     @classmethod
     def _init_keypoint_head(cls, cfg, input_shape):
@@ -1055,8 +1055,19 @@ class HeightStandardROIHeads(StandardROIHeads):
             nn.init.normal_(height_cls_score.weight, std=0.01)
             ret["height_predictor"] = height_predictor
             ret["height_cls_score"] = height_cls_score
-            ret["height_mean"] = cfg.MODEL.HEIGHT_MEAN
-            ret["height_std"] = cfg.MODEL.HEIGHT_STD
+            # Create buffers for fast GPU lookup
+            max_id = max(s['id'] for s in COCO_SCALE_STATS) + 1
+            means = torch.zeros(max_id)
+            stds = torch.zeros(max_id)
+            bins = torch.zeros((max_id, cfg.MODEL.HEIGHT_HEAD.FC_DIM))
+            for stat in COCO_SCALE_STATS:
+                idx = stat['id']
+                means[idx] = stat['height_mean']
+                stds[idx] = stat['height_std']
+                bins[idx] = torch.as_tensor(stat['bins'])
+            ret["class_means"] = means
+            ret["class_stds"] = stds
+            ret["class_bins"] = bins
         return ret
 
     def _add_gt_to_pred(
@@ -1284,6 +1295,7 @@ class HeightStandardROIHeads(StandardROIHeads):
             boxes = [
                 x.pred_boxes for x in instances
             ]
+            cls_ids = torch.cat([i.pred_classes for i in instances])
             features = self.keypoint_pooler(features, boxes)
         else:
             features = {f: features[f] for f in self.keypoint_in_features}
@@ -1292,7 +1304,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         # Copy of keypoint_rcnn_inference that don't save the logits during training.
         keypoint_rcnn_inference_no_heatmap(layers, instances)
         all_person_hs = prob_to_est(
-            self.height_cls_score(self.height_predictor(layers)), self.human_bins
+            self.height_cls_score(self.height_predictor(layers)), self.class_bins[cls_ids]
         )
         del layers
         num_instances_per_image = [len(i) for i in instances]
@@ -1301,8 +1313,8 @@ class HeightStandardROIHeads(StandardROIHeads):
         if self.training:
             losses["height_loss"] = person_h_list_loss(
                 all_person_hs,
-                self.height_mean,
-                self.height_std,
+                self.class_means[cls_ids],
+                self.class_stds[cls_ids],
                 num_instances_per_image,
             )
         return instances, losses
