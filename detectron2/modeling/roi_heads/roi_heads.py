@@ -974,6 +974,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         padded_input_size: int = 10,
         height_predictor: Optional[nn.Module] = None,
         height_cls_score: Optional[nn.Module] = None,
+        height_loss_weight: Optional[float] = None,
         height_mean: Optional[float] = None,
         height_std: Optional[float] = None,
         **kwargs,
@@ -993,6 +994,7 @@ class HeightStandardROIHeads(StandardROIHeads):
             **kwargs,
         )
         self.padded_input_size = padded_input_size
+        self.height_loss_weight = height_loss_weight
         self.height_on = height_predictor is not None
         self.height_predictor = height_predictor
         self.height_cls_score = height_cls_score
@@ -1040,13 +1042,10 @@ class HeightStandardROIHeads(StandardROIHeads):
         # If we set the number of Conv3x to 0 and FC-2
         # We will have the same predictor as Jerry
         if cfg.MODEL.HEIGHT_ON:
+            ret["height_loss_weight"] = cfg.MODEL.HEIGHT_HEAD.LOSS_WEIGHT
             height_predictor = FastRCNNConvFCHeadHeight(
                 cfg,
-                ShapeSpec(
-                    channels=cfg.MODEL.ROI_KEYPOINT_HEAD.NUM_KEYPOINTS,
-                    width=cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_RESOLUTION * 4.0,
-                    height=cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_RESOLUTION * 4.0,
-                )
+                shape,
             )
             height_cls_score = nn.Linear(
                 cfg.MODEL.HEIGHT_HEAD.FC_DIM,
@@ -1282,21 +1281,20 @@ class HeightStandardROIHeads(StandardROIHeads):
         if self.keypoint_pooler is not None:
             features = [features[f] for f in self.keypoint_in_features]
             boxes = [
-                x.pred_boxes for x in instances
+                x.gt_boxes if self.training else x.pred_boxes for x in instances
             ]
             features = self.keypoint_pooler(features, boxes)
         else:
             features = {f: features[f] for f in self.keypoint_in_features}
-        layers = self.keypoint_head.layers(features)
-        del features
         # Copy of keypoint_rcnn_inference that don't save the logits during training.
-        keypoint_rcnn_inference_no_heatmap(layers, instances)
+        keypoint_rcnn_inference_no_heatmap(self.keypoint_head.layers(features), instances)
         all_person_hs = prob_to_est(
-            self.height_cls_score(self.height_predictor(layers)), self.human_bins
+            self.height_cls_score(self.height_predictor(features)), self.human_bins
         )
-        del layers
+        del features
         num_instances_per_image = [len(i) for i in instances]
         for height, pred_instances in zip(all_person_hs.split(num_instances_per_image), instances):
+            # pred_instances.pred_height = torch.zeros_like(height, device=height.device) + 1.75
             pred_instances.pred_height = height
         if self.training:
             losses["height_loss"] = person_h_list_loss(
@@ -1304,7 +1302,7 @@ class HeightStandardROIHeads(StandardROIHeads):
                 self.height_mean,
                 self.height_std,
                 num_instances_per_image,
-            )
+            ) * self.height_loss_weight
         return instances, losses
 
 

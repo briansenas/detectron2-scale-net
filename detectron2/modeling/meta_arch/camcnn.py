@@ -260,7 +260,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         point_net_refine: Optional[nn.Module] = None,
         point_net_refine_layers: Optional[int] = None,
         point_net_refine_temperature: float = 1.0,
-        height_loss_weight: Optional[float] = None,
         reduce_method: str = "softmax",
         smooth_l1_beta: float = 0.0,
         input_format: Optional[str] = None,
@@ -295,7 +294,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         self.point_net_refine = point_net_refine
         self.point_net_refine_layers = point_net_refine_layers
         self.point_net_refine_temperature = point_net_refine_temperature
-        self.height_loss_weight = height_loss_weight
         self.reduce_method = reduce_method
         self.reduce_method = reduce_method
         self.smooth_l1_beta = smooth_l1_beta
@@ -335,7 +333,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         }
         if cfg.MODEL.HEIGHT_ON:
             ret["padded_input_size"] = cfg.MODEL.HEIGHT_HEAD.PADDED_INPUT
-            ret["height_loss_weight"] = cfg.MODEL.HEIGHT_HEAD.LOSS_WEIGHT
             ret["yc_bins_centers_list"] = torch.stack(
                 [torch.from_numpy(yc_bins_layer).float() for yc_bins_layer in yc_bins_layers_list])
             ret["human_height_centers_list"] = torch.stack(
@@ -522,11 +519,11 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         # Per-instance mean
         vt_loss = (loss.sum(dim=1) / (mask.sum(dim=1) + eps)).mean()
         losses = {"vt_loss": vt_loss}
-        # with torch.no_grad():
-        #     denominator = (vt - vb) * (1.0 + (vc - v0_pred) * (vc - vt) / f_estim ** 2)
-        #     yc_implied = h_human_s * (v0_pred - vb) / (denominator + eps)
-        # loss_consistency = torch.mean((yc_est.detach() - yc_implied)**2 * mask)
-        # losses.update({"consistency_loss": loss_consistency})
+        with torch.no_grad():
+            denominator = (vt - vb) * (1.0 + (vc - v0_pred) * (vc - vt) / f_estim ** 2)
+            yc_implied = h_human_s * (v0_pred - vb) / (denominator + eps)
+        loss_consistency = torch.mean((yc_est.detach() - yc_implied)**2 * mask)
+        losses.update({"consistency_loss": loss_consistency})
         camrcnn_data = {
             "valid_mask": valid_mask,
             "mask": mask,
@@ -695,8 +692,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
 
         proposals, detector_losses = self.roi_heads(images, features, proposals, gt_instances)
         del images
-        if self.height_on:
-            detector_losses["height_loss"] *= self.height_loss_weight
 
         losses = {}
         losses.update(detector_losses)
@@ -800,7 +795,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                     camrcnn_data["person_h"].shape[1]
                 ) *
                 mask *
-                self.height_loss_weight
+                self.roi_heads.height_loss_weight
             )
             height_loss = (height_loss.sum(dim=1) / (mask.sum(dim=1) + eps)).mean()
             losses.append(height_loss)
