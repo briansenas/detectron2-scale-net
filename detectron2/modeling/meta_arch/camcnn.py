@@ -519,11 +519,11 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         # Per-instance mean
         vt_loss = (loss.sum(dim=1) / (mask.sum(dim=1) + eps)).mean()
         losses = {"vt_loss": vt_loss}
-        with torch.no_grad():
-            denominator = (vt - vb) * (1.0 + (vc - v0_pred) * (vc - vt) / f_estim ** 2)
-            yc_implied = h_human_s * (v0_pred - vb) / (denominator + eps)
-        loss_consistency = torch.mean((yc_est.detach() - yc_implied)**2 * mask)
-        losses.update({"consistency_loss": loss_consistency})
+        # with torch.no_grad():
+        #     denominator = (vt - vb) * (1.0 + (vc - v0_pred) * (vc - vt) / f_estim ** 2)
+        #     yc_implied = h_human_s * (v0_pred - vb) / (denominator + eps)
+        # loss_consistency = torch.mean((yc_est.detach() - yc_implied)**2 * mask)
+        # losses.update({"consistency_loss": loss_consistency})
         camrcnn_data = {
             "valid_mask": valid_mask,
             "mask": mask,
@@ -627,7 +627,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 keypoints=input["instances"].gt_keypoints if self.height_on else None,
             )
             gt_pitch, gt_vfov, gt_roll = input["pitch"], input["vfov"], input["roll"]
-            v_pred = Visualizer(img, metadata=None)
+            v_pred = Visualizer(img, metadata=metadata)
             v_pred.overlay_instances(
                 boxes=prop.pred_boxes[0:box_size].tensor.cpu().numpy(),
                 keypoints=prop.pred_keypoints[0:box_size].detach().cpu().numpy() if self.height_on else None,
