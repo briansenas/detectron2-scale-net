@@ -412,7 +412,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             device=self.device
         )  # [B]
         gt_boxes_list = [inst.gt_boxes.tensor if self.training else inst.pred_boxes.tensor for inst in predicted_proposals]
-        pred_height_list = [inst.pred_height for inst in predicted_proposals]
         # Padding
         pad_to_size = self.padded_input_size if self.training else max([x.shape[0] for x in gt_boxes_list])
         gt_boxes_pad, _ = pad_to_max(gt_boxes_list, self.device, pad_to_size)
@@ -420,7 +419,13 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             (len(predicted_proposals)), device=self.device) for inst in predicted_proposals]
         gt_mask_pad, _ = pad_to_max(gt_mask_list, self.device, pad_to_size)
         mask = gt_mask_pad
-        pred_height_pad, _ = pad_to_max(pred_height_list, self.device, pad_to_size)
+        if "person_h" not in camrcnn_data:
+            pred_height_list = [inst.pred_height for inst in predicted_proposals]
+            pred_height_pad, _ = pad_to_max(pred_height_list, self.device, pad_to_size)
+        else:
+            # When being called by _camrcnn_refine if have each layer new person_h
+            pred_height_pad = camrcnn_data["person_h"]
+
         if self.roi_heads.height_discount_from == "GT" and self.training:
             # NOTE: for multi-cat I would've to filter for only class 0 (person)
             # If we use discount for specific classes. I can just omit this for multi-class.
@@ -489,6 +494,9 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             camH_cls_logits = self.point_net({'points': points, "mask": mask.unsqueeze(1)})['cls_logit']
             yc_est = prob_to_est(camH_cls_logits / self.point_net_temperature,
                                  self.yc_bins_centers_list[0], self.reduce_method).unsqueeze(1)
+        # NOTE: Instead of calling this function again we should set the following loss and
+        # geo_model call into another helper function and call it from here and from the _refine
+        # This way we can reduce this function responsability... and save on some operations
         geo_model_input_dict = {
             "yc_est": yc_est,
             "vb": vb,
@@ -527,7 +535,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             "mask": mask,
             "H": H,
             "yc_est": yc_est,
-            "yc_est_delta": vt_camEst_batch,
             "v0_pred": v0_pred,
             "vt_camEst_N": vt_camEst_N,
             "person_h": pred_height_pad,
@@ -733,10 +740,11 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         # cam_inputs = _move_logits_to_device(cam_inputs, self.device)
         return dt_inputs, cam_inputs
 
-    def _camrcnn_refine(self, camrcnn_data):
+    def _camrcnn_refine(self, proposals, camrcnn_data):
         mask = camrcnn_data["mask"]
         eps = 1e-6
-        losses = []
+        h_losses = []
+        vt_losses = []
         v0_01_batch_est = ((camrcnn_data['H'] - camrcnn_data['v0_pred']) /
                            camrcnn_data['H']).view(-1, 1, 1).repeat(1, camrcnn_data["person_h"].shape[1], 1)
         # NOTE: In the original SVMIW he saves intermediate states before each refine to have the vt_loss (due to new yc)
@@ -748,7 +756,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             person_h_discount_norm = (h_human_s / self.roi_heads.height_mean -
                                       1).view(*camrcnn_data["person_h"].shape[:2], -1)
             input_list = [v0_01_batch_est, camrcnn_data["bboxes_offset_norm"],
-                          camrcnn_data["yc_est_delta"].unsqueeze(-1), person_h_norm, person_h_discount_norm]
+                          camrcnn_data["vt_camEst_N"].unsqueeze(-1), person_h_norm, person_h_discount_norm]
             input_list = [x * mask.unsqueeze(2) for x in input_list]
             if self.point_net_detach:
                 input_list = [x.detach() for x in input_list]
@@ -766,9 +774,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             )
             # Refining our latest prediction of camera height
             camrcnn_data["yc_est"] = camrcnn_data["yc_est"] + yc_est_batch_delta.unsqueeze(1)
-            # NOTE: Here we would have to measure the vt_loss once again to have the refine_layer vt_loss
-            # But we would have to create a custom AMP / SimpleTrainer that don't sum them to the total loss
-            # Unless we don't care about the total loss since we can .detach() it.
             # Refine our personH
             seg_layer_name = "point_net_refine_seg_layer_%d" % (layer_idx + 1)
             point_net_refine_seg_layer_output = self.point_net_refine[seg_layer_name](
@@ -784,7 +789,12 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             )
             all_person_hs_delta = all_person_hs_delta.reshape(camrcnn_data["person_h"].shape)
             camrcnn_data["person_h"] = camrcnn_data["person_h"] + all_person_hs_delta * mask
-            # NOTE: We would have to do the same as before for the person_h layer level loss
+            # New reprojection loss for next layer
+            camrcnn_data, vt_loss = self._camrcnn_predictions(
+                proposals,
+                camrcnn_data,
+            )
+            vt_losses.append(vt_loss["vt_loss"])
             height_loss = (
                 person_h_list_loss(
                     camrcnn_data["person_h"],
@@ -796,8 +806,10 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 self.roi_heads.height_loss_weight
             )
             height_loss = (height_loss.sum(dim=1) / (mask.sum(dim=1) + eps)).mean()
-            losses.append(height_loss)
-        return camrcnn_data, {"height_loss": sum(losses) / len(losses)}
+            h_losses.append(height_loss)
+        # Since d2 sum all losses by default in DefaultTrainer we return the average layer loss.
+        # We could also return only the last layer loss or implement custom loss management
+        return camrcnn_data, {"height_losses": h_losses, "vt_losses": vt_losses}
 
     def forward(self, batched_inputs: List[Dict[str, torch.Tensor]]):
         """
@@ -846,14 +858,16 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             losses.update(vt_loss)
             if self.height_refine_on and camrcnn_data:
                 camrcnn_data, refine_loss = self._camrcnn_refine(
-                    camrcnn_data,
-                )
-                losses["height_loss"] = (losses["height_loss"] + refine_loss["height_loss"]) / 2.0
-                camrcnn_data, vt_loss = self._camrcnn_predictions(
                     proposals,
                     camrcnn_data,
                 )
-                losses["vt_loss"] = (losses["vt_loss"] + vt_loss["vt_loss"]) / 2.0
+                losses["height_loss"] = (losses["height_loss"] + sum(refine_loss["height_losses"])
+                                         ) / (len(refine_loss["height_losses"]) + 1)
+                losses["vt_loss"] = (losses["vt_loss"] + sum(refine_loss["vt_losses"])) / \
+                    (len(refine_loss["vt_losses"]) + 1)
+                # Either assign new values in Instances object or use camrcnn_data downstream
+                for m, h, prop in zip(camrcnn_data["mask"], camrcnn_data["person_h"], proposals):
+                    prop.pred_height = h[:m.sum()]
 
         if self.vis_period > 0:
             storage = get_event_storage()
