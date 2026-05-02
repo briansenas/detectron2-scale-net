@@ -264,7 +264,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         smooth_l1_beta: float = 0.0,
         input_format: Optional[str] = None,
         padded_input_size: int = 100,
-        discount_from: str = "GT",
         vis_period: int = 0,
     ):
         """
@@ -298,7 +297,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         self.reduce_method = reduce_method
         self.smooth_l1_beta = smooth_l1_beta
         self.padded_input_size = padded_input_size
-        self.discount_from = discount_from
         self.register_buffer("horizon_bins_center", horizon_bins_center)
         self.register_buffer("pitch_bins_center", pitch_bins_center)
         self.register_buffer("vfov_bins_center", vfov_bins_center)
@@ -346,7 +344,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             )
             ret["point_net_temperature"] = cfg.MODEL.POINT_NET.TEMPERATURE
             ret["point_net_detach"] = cfg.MODEL.POINT_NET.DETACH
-            ret["discount_from"] = cfg.MODEL.HEIGHT_HEAD.DISCOUNT_FROM
             if cfg.MODEL.HEIGHT_REFINE_ON:
                 point_net_refine = nn.ModuleDict([])
                 point_net_refine_layers = cfg.MODEL.POINT_NET.REFINE_LAYERS
@@ -424,8 +421,9 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         gt_mask_pad, _ = pad_to_max(gt_mask_list, self.device, pad_to_size)
         mask = gt_mask_pad
         pred_height_pad, _ = pad_to_max(pred_height_list, self.device, pad_to_size)
-        if self.discount_from == "GT" and self.training:
+        if self.roi_heads.height_discount_from == "GT" and self.training:
             # NOTE: for multi-cat I would've to filter for only class 0 (person)
+            # If we use discount for specific classes. I can just omit this for multi-class.
             straighten_ratio_kps_list = [inst.gt_keypoints.tensor for inst in predicted_proposals]
         else:
             # NOTE: for multi-cat I would have to check "if inst.has(...)" and fill the straighten ratios with 1.0

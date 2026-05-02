@@ -977,6 +977,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         height_loss_weight: Optional[float] = None,
         height_mean: Optional[float] = None,
         height_std: Optional[float] = None,
+        height_discount_from: Optional[str] = "GT",
         **kwargs,
     ):
         super().__init__(
@@ -996,6 +997,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         self.padded_input_size = padded_input_size
         self.height_loss_weight = height_loss_weight
         self.height_on = height_predictor is not None
+        self.height_discount_from = height_discount_from
         self.height_predictor = height_predictor
         self.height_cls_score = height_cls_score
         self.height_mean = height_mean
@@ -1043,6 +1045,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         # We will have the same predictor as Jerry
         if cfg.MODEL.HEIGHT_ON:
             ret["height_loss_weight"] = cfg.MODEL.HEIGHT_HEAD.LOSS_WEIGHT
+            ret["height_discount_from"] = cfg.MODEL.HEIGHT_HEAD.DISCOUNT_FROM
             height_predictor = FastRCNNConvFCHeadHeight(
                 cfg,
                 shape,
@@ -1276,7 +1279,8 @@ class HeightStandardROIHeads(StandardROIHeads):
         if self.training:
             # head is only trained on positive proposals with >=1 visible keypoints.
             instances, _ = select_foreground_proposals(instances, self.num_classes)
-            instances = select_proposals_with_visible_keypoints(instances)
+            if self.height_discount_from == "GT":
+                instances = select_proposals_with_visible_keypoints(instances)
 
         if self.keypoint_pooler is not None:
             features = [features[f] for f in self.keypoint_in_features]
