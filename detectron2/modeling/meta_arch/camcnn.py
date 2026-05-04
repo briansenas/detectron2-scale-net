@@ -20,7 +20,6 @@ from detectron2.data.datasets.pano360 import (
 )
 from detectron2.data.detection_utils import (
     _add_whole_image_as_proposal,
-    _move_logits_to_device,
     accu_model_batch,
     convert_image_to_rgb,
     get_straighten_ratio_from_kps,
@@ -395,7 +394,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         )
         return vfov, pitch, roll, horizon
 
-    def _camrcnn_predictions(self, predicted_proposals: List[Instances], camrcnn_data):
+    def _camrcnn_predictions(self, predicted_proposals: List[Instances], camrcnn_data, grad_detach: bool = False):
         valid_mask = torch.as_tensor(
             [inst.pred_height.numel() > 0 for inst in predicted_proposals], dtype=bool, device=self.device)
         if sum(valid_mask) == 0:
@@ -432,7 +431,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             straighten_ratio_kps_list = [inst.gt_keypoints.tensor for inst in predicted_proposals]
         else:
             # NOTE: for multi-cat I would have to check "if inst.has(...)" and fill the straighten ratios with 1.0
-            # But filling would be position dependent so I would need a mask vector.
+            # But filling would be position dependent so I would need a mask vector. (If I want to use a pose discount)
             straighten_ratio_kps_list = [inst.pred_keypoints for inst in predicted_proposals]
 
         straighten_discount_ratio, _ = pad_to_max(
@@ -447,7 +446,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             pad_to_size,
             1.0,
         )
-        H = H_batch.unsqueeze(1)
+        H = H_batch.unsqueeze(1).float()
 
         vfov = vfov_est.unsqueeze(1)
         pitch = pitch_est.unsqueeze(1)
@@ -464,7 +463,12 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
 
         # Discount from predicted keypoints.
         h_human_s = (pred_height_pad * straighten_discount_ratio) * mask
-        eps = torch.finfo(h_human_s.dtype).eps  # approx 9.77e-4 for FP16
+        eps = torch.finfo(h_human_s.dtype).eps
+
+        if grad_detach:
+            v0_pred.detach()
+            pitch.detach()
+            f_estim.detach()
 
         bbox_y1y2_offset = gt_boxes_pad[:, :, [1, 3]] - (H - v0_pred).unsqueeze(-1)  # [top 0 , bottom H]
         bboxes_offset_norm = (
@@ -525,9 +529,11 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         # Per-instance mean
         vt_loss = (loss.sum(dim=1) / (mask.sum(dim=1) + eps)).mean()
         losses = {"vt_loss": vt_loss}
+        # fit_derek (fit_camH) from Rui Zhu code
         # with torch.no_grad():
         #     denominator = (vt - vb) * (1.0 + (vc - v0_pred) * (vc - vt) / f_estim ** 2)
         #     yc_implied = h_human_s * (v0_pred - vb) / (denominator + eps)
+        # loss_consistency = (yc_est.detach() - torch.median(yc_implied, axis=0)) ** 2 * mask
         # loss_consistency = torch.mean((yc_est.detach() - yc_implied)**2 * mask)
         # losses.update({"consistency_loss": loss_consistency})
         camrcnn_data = {
@@ -581,8 +587,8 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             v_pred.overlay_instances(
                 boxes=prop.pred_boxes[0:box_size].tensor.cpu().numpy(),
                 keypoints=prop.pred_keypoints[0:box_size].detach().cpu().numpy() if self.height_on else None,
-                labels=(prop.pred_height[0: box_size] * camrcnn_data["straighten_ratio"][i][0:box_size]
-                        ).detach().cpu().numpy() if self.height_on else None,
+                labels=(list(map("{:.4f}".format, (prop.pred_height[0: box_size] * camrcnn_data["straighten_ratio"][i][0:box_size]).detach(
+                ).cpu().numpy())) if self.height_on else None),
             )
             texts = {}
             texts["vfov"] = vfov_est[i]
@@ -636,8 +642,8 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             v_pred.overlay_instances(
                 boxes=prop.pred_boxes[0:box_size].tensor.cpu().numpy(),
                 keypoints=prop.pred_keypoints[0:box_size].detach().cpu().numpy() if self.height_on else None,
-                labels=(prop.pred_height[0: box_size] * camrcnn_data["straighten_ratio"][i][0:box_size]
-                        ).detach().cpu().numpy() if self.height_on else None,
+                labels=(list(map("{:.4f}".format, (prop.pred_height[0: box_size] * camrcnn_data["straighten_ratio"][i][0:box_size]).detach(
+                ).cpu().numpy())) if self.height_on else None),
             )
             if camrcnn_data:
                 texts = {}
@@ -750,6 +756,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         # NOTE: In the original SVMIW he saves intermediate states before each refine to have the vt_loss (due to new yc)
         # as well as, the person_h at every layer
         for layer_idx in range(self.point_net_refine_layers):
+            is_last_layer = layer_idx + 1 == self.point_net_refine_layers
             h_human_s = camrcnn_data["person_h"] * camrcnn_data["straighten_ratio"]
             person_h_norm = (camrcnn_data["person_h"] / self.roi_heads.height_mean -
                              1).view(*camrcnn_data["person_h"].shape[:2], -1)
@@ -793,6 +800,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             camrcnn_data, vt_loss = self._camrcnn_predictions(
                 proposals,
                 camrcnn_data,
+                grad_detach=not is_last_layer,
             )
             vt_losses.append(vt_loss["vt_loss"])
             height_loss = (
@@ -847,13 +855,14 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         )
         del features, cam_proposals
         losses.update(cam_losses)
-        dt_logits = {k: v[:len(dt_inputs)].detach() for k, v in cls_logits.items()}
+        dt_logits = {k: v[:len(dt_inputs)] for k, v in cls_logits.items()}
         vfov_est, pitch_est, roll_est, horizon_est = self._get_camera_values(dt_logits)
         camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, "horizon_est": horizon_est}
         if self.height_on:
             camrcnn_data, vt_loss = self._camrcnn_predictions(
                 proposals,
                 camrcnn_data,
+                self.height_refine_on,
             )
             losses.update(vt_loss)
             if self.height_refine_on and camrcnn_data:

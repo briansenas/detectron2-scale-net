@@ -1,4 +1,5 @@
 # output dir
+ugroutput/
 slurmReports
 cuda-cache
 tmpdir

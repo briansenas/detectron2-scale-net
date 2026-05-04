@@ -1,6 +1,6 @@
 _BASE_: "../COCO-Keypoints/keypoint_rcnn_R_50_FPN_3x.yaml"
 MODEL:
-  WEIGHTS: "output/kpsbbox-calib-v1/model_final.pth"
+  WEIGHTS: "output/kpsbbox-calib-v2/model_final.pth"
   META_ARCHITECTURE: "GeneralizedCamRCNN"
   ROI_HEADS:
     NAME: "HeightStandardROIHeads"
