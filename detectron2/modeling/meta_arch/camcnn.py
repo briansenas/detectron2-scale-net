@@ -611,7 +611,17 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             v_gt.overlay_instances(
                 boxes=input["instances"].gt_boxes,
             )
-            gt_pitch, gt_vfov, gt_roll = input["pitch"], input["vfov"], input["roll"]
+            if "pitch" in input:
+                gt_pitch, gt_vfov, gt_roll = input["pitch"], input["vfov"], input["roll"]
+                anno_img, _ = showHorizonLine(
+                    v_gt.get_output().get_image(), gt_vfov, gt_pitch, gt_roll
+                )
+                texts = {}
+                for col in ["vfov", "pitch", "roll", "horizon"]:
+                    texts[col] = input[col]
+                if self.height_on:
+                    texts["yc_estCam"] = input["yc_estCam"]
+                v_gt = self._draw_labels(v_gt, texts)
             v_pred = Visualizer(img, metadata=None)
             v_pred.overlay_instances(
                 boxes=prop.pred_boxes[0:box_size].tensor.cpu().numpy(),
@@ -619,11 +629,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             )
             if camrcnn_data:
                 texts = {}
-                for col in ["vfov", "pitch", "roll", "horizon"]:
-                    texts[col] = input[col]
-                if self.height_on:
-                    texts["yc_estCam"] = input["yc_estCam"]
-                v_gt = self._draw_labels(v_gt, texts)
                 texts["vfov"] = vfov_est[i]
                 texts["pitch"] = pitch_est[i]
                 texts["roll"] = roll_est[i]
@@ -634,9 +639,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                     v_pred,
                     texts,
                 )
-            anno_img, _ = showHorizonLine(
-                v_gt.get_output().get_image(), gt_vfov, gt_pitch, gt_roll
-            )
             prop_img, _ = showHorizonLine(
                 v_pred.get_output().get_image(),
                 vfov_est[i].detach().cpu().numpy(),

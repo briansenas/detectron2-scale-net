@@ -139,7 +139,7 @@ car_bins_layers_list = make_bins_layers_list(car_bins_lowHigh_list)
 COCO_SCALE_STATS = [
     {"height_mean": 1.75, "height_std": 0.2, "id": 0, "name": "person",
         "bins": human_bins, "layer_list": human_bins_layers_list},
-    {"height_mean": 1.59, "height_std": 0.2, "id": 1, "name": "car", "bins": car_bins, "layer_list": car_bins_layers_list},
+    {"height_mean": 1.59, "height_std": 0.2, "id": 2, "name": "car", "bins": car_bins, "layer_list": car_bins_layers_list},
 ]
 
 
