@@ -342,22 +342,26 @@ class AspectRatioGroupedDataset(data.IterableDataset):
 
 
 class AspectRatioGroupedMultipleDataset(data.IterableDataset):
-    def __init__(self, datasets, ratios, keys: Optional[list] = None):
+    def __init__(self, datasets, ratios, keys: Optional[list] = None, buffer_multiplier: int = 2):
         """
+        Best effort class to attempt to group by aspect ratio by buffering at most twice the size of the expected dataset
+        ratio of multiple datasets. Should take no longer than not buffering
         Args:
-            dataset: an iterable. Each element must be a dict with keys
+            datasets: list of iterables. Each element must be a dict with keys
                 "width" and "height", which will be used to batch data.
-            batch_size (int):
+            ratios (list[int]): the ratio of each dataset
+            keys (list[str]): name of the datasets. The return is a dict[key] = list[dict] for key in keys.
         """
         self.datasets = datasets
         self.ratios = ratios
         self.keys = keys or [f"dataset_{i}" for i, _ in enumerate(datasets)]
         self._buckets = {}
         self._ratio = {}
-        self.max_wait = sum(self.ratios) + max(self.ratios)
+        self._max_buffer = {}
         for i, k in enumerate(self.keys):
             self._buckets[k] = [[] for _ in range(2)]
             self._ratio[k] = self.ratios[i]
+            self._max_buffer[k] = self.ratios[i] * buffer_multiplier
 
     def __iter__(self):
         def _check_bucket(d, k):
@@ -365,67 +369,54 @@ class AspectRatioGroupedMultipleDataset(data.IterableDataset):
             bucket_id = 0 if w > h else 1
             bucket = self._buckets[k][bucket_id]
             bucket.append(d)
-            if len(bucket) >= self._ratio[k]:
-                batch = bucket[:self._ratio[k]]
-                del bucket[:self._ratio[k]]
-                return bucket_id, batch
-
-            return None, None
 
         iterators = {k: iter(dataset) for k, dataset in zip(self.keys, self.datasets)}
-        ready_flags = {k: None for k in self.keys}
-        ready = {0: {}, 1: {}}
-        wait = 0
+        buffer_full = {k: False for k in self.keys}
         while True:
             for k in self.keys:
-                if not ready_flags[k]:
+                # Fill at most twice the size of the max ratio sample
+                # First iteration can take 2 as long as the non grouping to yield
+                landscape = len(self._buckets[k][0])
+                vertical = len(self._buckets[k][1])
+                buffer_full[k] = landscape + vertical >= self._max_buffer[k]
+                if not buffer_full[k]:
                     sample = next(iterators[k])
-                    bucket_id, batch = _check_bucket(sample, k)
-                    if batch is not None:
-                        ready[bucket_id][k] = batch
-                        ready_flags[k] = bucket_id
+                    _check_bucket(sample, k)
             # Check whether any grouping is ready:
+            ready = {0: {}, 1: {}}
             for b in [0, 1]:
+                for k in self.keys:
+                    if len(self._buckets[k][b]) >= self._ratio[k]:
+                        ready[b][k] = self._buckets[k][b][:self._ratio[k]]
                 if len(ready[b]) == len(self.keys):
-                    data = ready[b].copy()
-                    ready[b] = {}
-                    ready_flags = {k: None for k in self.keys}
-                    wait = 0
+                    for k in self.keys:
+                        self._buckets[k][b] = self._buckets[k][b][self._ratio[k]:]
+                    data = ready[b]
                     yield data
                     break
             else:
-                wait += 1
-                if wait >= self.max_wait:
+                # If all buffers are full (==self.max_buffer)
+                if all([v for v in buffer_full.values()]):
+                    # First pass: check feasibility WITHOUT mutating real buckets
                     temp_merged = {}
                     temp_remaining = {}
-
-                    # First pass: check feasibility WITHOUT mutating real buckets
+                    # Try to use the longest matching sequence from the first dataset (therefore better to have ratio in descending order )
+                    choose_longest = len(self._buckets[self.keys[0]][0]) >= len(self._buckets[self.keys[0]][1])
                     for k in self.keys:
                         bucket0 = self._buckets[k][0]
                         bucket1 = self._buckets[k][1]
-                        combined = bucket0 + bucket1
-
                         need = self._ratio[k]
-
-                        if len(combined) < need:
+                        if len(bucket0) + len(bucket1) < need:
                             break  # Abort: not all keys can be satisfied
+                        combined = bucket0 + bucket1 if choose_longest else bucket1 + bucket0
 
                         temp_merged[k] = combined[:need]
                         temp_remaining[k] = combined[need:]
                     else:
-                        # Second pass: commit changes only if ALL keys are valid
-                        ready = {0: {}, 1: {}}
-                        ready_flags = {}
                         for k in self.keys:
                             self._buckets[k][0].clear()
                             self._buckets[k][1].clear()
-
                             # Re-bucket remaining samples
                             for d in temp_remaining[k]:
-                                bucket_id, batch = _check_bucket(d, k)
-                                if batch is not None:
-                                    ready[bucket_id][k] = batch
-                                    ready_flags[k] = bucket_id
-
-                        wait = 0
+                                _check_bucket(d, k)
                         yield temp_merged

@@ -27,7 +27,7 @@ from .box_head import (
     build_box_head,
 )
 from .fast_rcnn import FastRCNNOutputLayers
-from .keypoint_head import build_keypoint_head, keypoint_rcnn_inference_no_heatmap
+from .keypoint_head import build_keypoint_head
 from .mask_head import build_mask_head
 
 ROI_HEADS_REGISTRY = Registry("ROI_HEADS")
@@ -972,8 +972,11 @@ class HeightStandardROIHeads(StandardROIHeads):
         keypoint_head: Optional[nn.Module] = None,
         train_on_pred_boxes: bool = False,
         padded_input_size: int = 10,
+        height_pooler: Optional[ROIPooler] = None,
+        height_in_features: Optional[List[str]] = None,
         height_predictor: Optional[nn.Module] = None,
         height_cls_score: Optional[nn.Module] = None,
+        height_loss_weight: Optional[float] = None,
         class_means: Optional[torch.tensor] = None,
         class_stds: Optional[torch.tensor] = None,
         class_bins: Optional[torch.tensor] = None,
@@ -994,67 +997,77 @@ class HeightStandardROIHeads(StandardROIHeads):
             **kwargs,
         )
         self.padded_input_size = padded_input_size
-        self.height_on = height_predictor is not None
+        self.height_on = height_cls_score is not None
+        self.height_pooler = height_pooler
+        self.height_in_features = height_in_features
         self.height_predictor = height_predictor
         self.height_cls_score = height_cls_score
+        self.height_loss_weight = height_loss_weight
         self.register_buffer("class_means", class_means)
         self.register_buffer("class_stds", class_stds)
         self.register_buffer("class_bins", class_bins)
 
     @classmethod
-    def _init_keypoint_head(cls, cfg, input_shape):
-        if not cfg.MODEL.KEYPOINT_ON:
-            return {}
+    def _init_box_head(cls, cfg, input_shape):
         # fmt: off
         in_features       = cfg.MODEL.ROI_HEADS.IN_FEATURES
-        pooler_resolution = cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_RESOLUTION
-        pooler_scales     = tuple(1.0 / input_shape[k].stride for k in in_features)  # noqa
-        sampling_ratio    = cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_SAMPLING_RATIO
-        pooler_type       = cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_TYPE
+        pooler_resolution = cfg.MODEL.ROI_BOX_HEAD.POOLER_RESOLUTION
+        pooler_scales     = tuple(1.0 / input_shape[k].stride for k in in_features)
+        sampling_ratio    = cfg.MODEL.ROI_BOX_HEAD.POOLER_SAMPLING_RATIO
+        pooler_type       = cfg.MODEL.ROI_BOX_HEAD.POOLER_TYPE
         # fmt: on
 
-        in_channels = [input_shape[f].channels for f in in_features][0]
+        # If StandardROIHeads is applied on multiple feature maps (as in FPN),
+        # then we share the same predictors and therefore the channel counts must be the same
+        in_channels = [input_shape[f].channels for f in in_features]
+        # Check all channel counts are equal
+        assert len(set(in_channels)) == 1, in_channels
+        in_channels = in_channels[0]
 
-        ret = {"keypoint_in_features": in_features}
-        ret["keypoint_pooler"] = (
-            ROIPooler(
+        box_pooler = ROIPooler(
+            output_size=pooler_resolution,
+            scales=pooler_scales,
+            sampling_ratio=sampling_ratio,
+            pooler_type=pooler_type,
+        )
+        # Here we split "box head" and "box predictor", which is mainly due to historical reasons.
+        # They are used together so the "box predictor" layers should be part of the "box head".
+        # New subclasses of ROIHeads do not need "box predictor"s.
+        shape = ShapeSpec(
+            channels=in_channels,
+            height=pooler_resolution,
+            width=pooler_resolution,
+        )
+        box_head = build_box_head(
+            cfg,
+            shape,
+        )
+        box_predictor = FastRCNNOutputLayers(cfg, box_head.output_shape)
+        ret = {
+            "box_in_features": in_features,
+            "box_pooler": box_pooler,
+            "box_head": box_head,
+            "box_predictor": box_predictor,
+        }
+        if cfg.MODEL.HEIGHT_ON:
+            ret["height_in_features"] = in_features
+            ret["height_pooler"] = ROIPooler(
                 output_size=pooler_resolution,
                 scales=pooler_scales,
                 sampling_ratio=sampling_ratio,
                 pooler_type=pooler_type,
             )
-            if pooler_type
-            else None
-        )
-        if pooler_type:
-            shape = ShapeSpec(
-                channels=in_channels,
-                width=pooler_resolution,
-                height=pooler_resolution,
-            )
-        else:
-            shape = {f: input_shape[f] for f in in_features}
-
-        ret["keypoint_head"] = build_keypoint_head(cfg, shape)
-        ret["padded_input_size"] = cfg.MODEL.HEIGHT_HEAD.PADDED_INPUT
-        # If we set the number of Conv3x to 0 and FC-2
-        # We will have the same predictor as Jerry
-        if cfg.MODEL.HEIGHT_ON:
             height_predictor = FastRCNNConvFCHeadHeight(
                 cfg,
-                ShapeSpec(
-                    channels=cfg.MODEL.ROI_KEYPOINT_HEAD.NUM_KEYPOINTS,
-                    width=cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_RESOLUTION * 4.0,
-                    height=cfg.MODEL.ROI_KEYPOINT_HEAD.POOLER_RESOLUTION * 4.0,
-                )
+                shape,
             )
             height_cls_score = nn.Linear(
                 cfg.MODEL.HEIGHT_HEAD.FC_DIM,
                 cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES,
             )
             nn.init.normal_(height_cls_score.weight, std=0.01)
-            ret["height_predictor"] = height_predictor
             ret["height_cls_score"] = height_cls_score
+            ret["height_predictor"] = height_predictor
             # Create buffers for fast GPU lookup
             max_id = max(s['id'] for s in COCO_SCALE_STATS) + 1
             means = torch.zeros(max_id)
@@ -1068,6 +1081,7 @@ class HeightStandardROIHeads(StandardROIHeads):
             ret["class_means"] = means
             ret["class_stds"] = stds
             ret["class_bins"] = bins
+            ret["height_loss_weight"] = cfg.MODEL.HEIGHT_HEAD.LOSS_WEIGHT
         return ret
 
     def _add_gt_to_pred(
@@ -1148,30 +1162,6 @@ class HeightStandardROIHeads(StandardROIHeads):
             results.append(inst)
         return results
 
-    def _forward_keypoint(
-        self,
-        features: Dict[str, torch.Tensor],
-        instances: List[Instances],
-    ):
-        if not self.keypoint_on:
-            return {} if self.training else instances
-
-        if self.training:
-            # head is only trained on positive proposals with >=1 visible keypoints.
-            instances, _ = select_foreground_proposals(instances, self.num_classes)
-            instances = select_proposals_with_visible_keypoints(instances)
-
-        if self.keypoint_pooler is not None:
-            features = [features[f] for f in self.keypoint_in_features]
-            boxes = [
-                x.proposal_boxes if self.training else x.pred_boxes for x in instances
-            ]
-            features = self.keypoint_pooler(features, boxes)
-        else:
-            features = {f: features[f] for f in self.keypoint_in_features}
-        # This part is what we removed from normal keypoint_head forward_call:
-        return self.keypoint_head(self.keypoint_head.layers(features), instances)
-
     def forward(
         self,
         images: ImageList,
@@ -1193,9 +1183,9 @@ class HeightStandardROIHeads(StandardROIHeads):
                 pred_instances, losses = self._forward_box_height(features, proposals)
                 with torch.no_grad():
                     pred_instances = self._add_gt_to_pred(pred_instances, targets)
+                del targets
             else:
                 losses.update(self._forward_box(features, proposals))
-            del targets
             # Usually the original proposals used by the box head are used by the mask, keypoint
             # heads. But when `self.train_on_pred_boxes is True`, proposals will contain boxes
             # predicted by the box head.
@@ -1203,10 +1193,9 @@ class HeightStandardROIHeads(StandardROIHeads):
             # NOTE: for multi-cat I would've to edit this forward to always do keypoint_inference_proposals
             # So that for the instances that contain people I get a new field keypoints (hopefully w pointers).
             losses.update(self._forward_keypoint(features, proposals))
-            if self.height_on:
-                proposals, keypoint_losses = self._forward_keypoint_height(features, pred_instances)
-                losses.update(keypoint_losses)
-            return proposals, losses
+            pred_instances, height_loss = self._forward_height(features, pred_instances)
+            losses.update(height_loss)
+            return pred_instances, losses
         else:
             if self.height_on:
                 pred_instances, _ = self._forward_box_height(features, proposals)
@@ -1214,7 +1203,8 @@ class HeightStandardROIHeads(StandardROIHeads):
                 pred_instances = self._forward_box(features, proposals)
             # During inference cascaded prediction is used: the mask and keypoints heads are only
             # applied to the top scoring box detections.
-            pred_instances, _ = self._forward_keypoint_height(features, pred_instances)
+            pred_instances = self.forward_with_given_boxes(features, pred_instances)
+            pred_instances, _ = self._forward_height(features, pred_instances)
             return pred_instances, {}
 
     def _forward_box_height(
@@ -1260,63 +1250,42 @@ class HeightStandardROIHeads(StandardROIHeads):
                         proposals_per_image.proposal_boxes = Boxes(pred_boxes_per_image)
         with torch.no_grad():
             pred_instances, _ = self.box_predictor.inference(predictions, proposals)
-        # Note: for multicategory estimation I believe I should do height estimation here
-        # Were the loss would depend on the class type (different a-priori) ussing box_features
-        # And set a new field in pred_instances.
         return pred_instances, losses
 
-    def _forward_keypoint_height(
+    def _forward_height(
         self,
         features: Dict[str, torch.Tensor],
         instances: List[Instances],
     ):
-        """
-        Forward logic of the keypoint prediction branch.
+        if not self.height_on:
+            return instances, {}
 
-        Args:
-            features (dict[str, Tensor]): mapping from feature map names to tensor.
-                Same as in :meth:`ROIHeads.forward`.
-            instances (list[Instances]): the per-image instances to train/predict keypoints.
-                In training, they can be the proposals.
-                In inference, they can be the boxes predicted by R-CNN box head.
-
-        Returns:
-            In training, a dict of losses.
-            In inference, update `instances` with new fields "pred_keypoints" and return it.
-        """
-        losses = {}
         if self.training:
             # head is only trained on positive proposals with >=1 visible keypoints.
             instances, _ = select_foreground_proposals(instances, self.num_classes)
-            instances = select_proposals_with_visible_keypoints(instances)
 
-        if self.keypoint_pooler is not None:
-            features = [features[f] for f in self.keypoint_in_features]
-            boxes = [
-                x.pred_boxes for x in instances
-            ]
-            cls_ids = torch.cat([i.pred_classes for i in instances])
-            features = self.keypoint_pooler(features, boxes)
-        else:
-            features = {f: features[f] for f in self.keypoint_in_features}
-        layers = self.keypoint_head.layers(features)
-        del features
-        # Copy of keypoint_rcnn_inference that don't save the logits during training.
-        keypoint_rcnn_inference_no_heatmap(layers, instances)
+        features = [features[f] for f in self.height_in_features]
+        boxes = [
+            x.gt_boxes if self.training else x.pred_boxes for x in instances
+        ]
+        features = self.height_pooler(features, boxes)
+
+        training_cls_ids = torch.cat([x.gt_classes if self.training else x.pred_classes for x in instances])
         all_person_hs = prob_to_est(
-            self.height_cls_score(self.height_predictor(layers)), self.class_bins[cls_ids]
-        )
-        del layers
-        num_instances_per_image = [len(i) for i in instances]
-        for height, pred_instances in zip(all_person_hs.split(num_instances_per_image), instances):
-            pred_instances.pred_height = height
+            self.height_cls_score(self.height_predictor(features)),
+            self.class_bins[training_cls_ids])
+        del features
+        losses = {}
+        num_instances = [len(p) for p in instances]
         if self.training:
             losses["height_loss"] = person_h_list_loss(
                 all_person_hs,
-                self.class_means[cls_ids],
-                self.class_stds[cls_ids],
-                num_instances_per_image,
-            )
+                self.class_means[training_cls_ids],
+                self.class_stds[training_cls_ids],
+                num_instances,
+            ) * self.height_loss_weight
+            for height, prop in zip(all_person_hs.split(num_instances), instances):
+                prop.pred_height = height
         return instances, losses
 
 

@@ -1,22 +1,21 @@
 _BASE_: "../COCO-Keypoints/keypoint_rcnn_R_50_FPN_3x.yaml"
 MODEL:
-  WEIGHTS: "output/kpsbbox-calib-v1/model_final.pth"
+  WEIGHTS: "output/kpsbbox-calib-v2/model_final.pth"
   META_ARCHITECTURE: "GeneralizedCamRCNN"
   ROI_HEADS:
     NAME: "HeightStandardROIHeads"
   ROI_BOX_HEAD:
     BBOX_REG_LOSS_WEIGHT: 10.0
   ROI_KEYPOINT_HEAD:
-    NAME: "KRCNNConvDeconvUpsampleHeadHeightPred"
+    NAME: "KRCNNConvDeconvUpsampleHead"
     LOSS_WEIGHT: 10.0
-  KEYPOINT_ON: True
+  KEYPOINT_ON: False
   HEIGHT_ON: True
   HEIGHT_REFINE_ON: True
   HEIGHT_HEAD:
     LOSS_WEIGHT: 0.05
     REDUCE_METHOD: "softmax"
     SMOOTH_L1_BETA: 0.1
-    DISCOUNT_FROM: "GT"
   POINT_NET:
     POOLING: "max"
     TEMPERATURE: 0.75
@@ -36,8 +35,8 @@ SOLVER:
   IMS_PER_BATCH: 6  # 2-1gpu 6-3gpu
   RATIO_PANO360: (3, 1)  # 3 COCO, 1 CALIB
   BASE_LR: 0.00025  # 0.002343 1gpu 0.007031 3 gpu (diverges?)
-  STEPS: (60000, 80000)
-  MAX_ITER: 90000
+  STEPS: (20000, 26000)
+  MAX_ITER: 30000
   AMP:
     ENABLED: True
 TEST:
@@ -45,7 +44,7 @@ TEST:
 DATALOADER:
   NUM_WORKERS: 2
   FILTER_EMPTY_ANNOTATIONS: False
-  ASPECT_RATIO_GROUPING: False
+  ASPECT_RATIO_GROUPING: True
 VIS_PERIOD: 500
 FLOAT32_PRECISION: "medium"
 SEED: 140421
