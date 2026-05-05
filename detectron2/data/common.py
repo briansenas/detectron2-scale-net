@@ -420,3 +420,31 @@ class AspectRatioGroupedMultipleDataset(data.IterableDataset):
                             for d in temp_remaining[k]:
                                 _check_bucket(d, k)
                         yield temp_merged
+
+
+class RatioSampler(data.IterableDataset):
+    def __init__(self, datasets, ratios, keys: Optional[list] = None):
+        """
+        Just samples from the datasets in the desired ratios
+        Args:
+            datasets: list of iterables. Each element must be a dict with keys
+                "width" and "height", which will be used to batch data.
+            ratios (list[int]): the ratio of each dataset
+            keys (list[str]): name of the datasets. The return is a dict[key] = list[dict] for key in keys.
+        """
+        self.datasets = datasets
+        self.ratios = ratios
+        self.keys = keys or [f"dataset_{i}" for i, _ in enumerate(datasets)]
+        self._ratio = {}
+        for i, k in enumerate(self.keys):
+            self._ratio[k] = self.ratios[i]
+
+    def __iter__(self):
+        iterators = {k: iter(dataset) for k, dataset in zip(self.keys, self.datasets)}
+        while True:
+            data = {}
+            for k in self.keys:
+                data[k] = []
+                for _ in range(self._ratio[k]):
+                    data[k].append(next(iterators[k]))
+            yield data

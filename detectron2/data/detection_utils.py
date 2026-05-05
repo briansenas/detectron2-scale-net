@@ -680,14 +680,11 @@ def argmax_with_bins(input, bins):
     return est_batch
 
 
-def prob_to_est(input, bins, reduce_method='softmax', debug=False):
-    if reduce_method == 'softmax':
+def prob_to_est(input, bins, is_training: bool = True):
+    if is_training:
         return softmax_with_bins(input, bins)
-    elif reduce_method == 'argmax':
-        return argmax_with_bins(input, bins)
     else:
-        msg = "The reduce_method should be softmax or argmax"
-        raise ValueError(msg)
+        return argmax_with_bins(input, bins)
 
 
 def get_straighten_ratio_from_kps(keypoints, kp_thresh=2):

@@ -19,6 +19,7 @@ from detectron2.config import CfgNode, LazyConfig
 from detectron2.data import (
     CalibMapper,
     COCOScaleMapper,
+    DatasetMapper,
     HybridDataMapper,
     MapDataset,
     MetadataCatalog,
@@ -26,7 +27,11 @@ from detectron2.data import (
     build_detection_train_loader,
 )
 from detectron2.data.build import get_detection_dataset_dicts, worker_init_reset_seed
-from detectron2.data.common import AspectRatioGroupedMultipleDataset, ToIterableDataset
+from detectron2.data.common import (
+    AspectRatioGroupedMultipleDataset,
+    RatioSampler,
+    ToIterableDataset,
+)
 from detectron2.data.samplers import TrainingSampler
 from detectron2.evaluation import (
     COCOEvaluator,
@@ -896,56 +901,114 @@ class HybridScaleTrainer(DefaultTrainer):
         Returns:
             iterablee
         """
-        if cfg.DATALOADER.ASPECT_RATIO_GROUPING:
-            total_batch_size = cfg.SOLVER.IMS_PER_BATCH
-            num_workers = cfg.DATALOADER.NUM_WORKERS
-            datasets = [
-                MapDataset(
-                    get_detection_dataset_dicts(
-                        "COCOScale2017_train", True, 2, None, check_consistency=True
-                    ),
-                    COCOScaleMapper(cfg, is_train=True),
+        total_batch_size = cfg.SOLVER.IMS_PER_BATCH
+        num_workers = cfg.DATALOADER.NUM_WORKERS
+        datasets = [
+            MapDataset(
+                get_detection_dataset_dicts(
+                    "COCOScale2017_train", True, 2, None, check_consistency=True
                 ),
-                MapDataset(
-                    get_detection_dataset_dicts(
-                        "Pano360_train", False, 0, None, check_consistency=True
-                    ),
-                    CalibMapper(cfg, is_train=True),
+                COCOScaleMapper(cfg, is_train=True),
+            ),
+            MapDataset(
+                get_detection_dataset_dicts(
+                    "Pano360_train", False, 0, None, check_consistency=True
                 ),
-            ]
-            world_size = comm.get_world_size()
-            assert (
-                total_batch_size > 0 and total_batch_size % world_size == 0
-            ), "Total batch size ({}) must be divisible by the number of gpus ({}).".format(
-                total_batch_size,
-                world_size,
+                CalibMapper(cfg, is_train=True),
+            ),
+        ]
+        world_size = comm.get_world_size()
+        assert (
+            total_batch_size > 0 and total_batch_size % world_size == 0
+        ), "Total batch size ({}) must be divisible by the number of gpus ({}).".format(
+            total_batch_size,
+            world_size,
+        )
+        batch_size = total_batch_size // world_size
+        generator = torch.Generator()
+        generator.manual_seed(cfg.SEED)
+        ratio = cfg.SOLVER.RATIO_PANO360
+        dataloaders = []
+        for i, dataset in enumerate(datasets):
+            dataset = ToIterableDataset(dataset, TrainingSampler(
+                len(dataset), ratio[i]), shard_chunk_size=batch_size)
+            dataloaders.append(
+                torchdata.DataLoader(
+                    dataset,
+                    num_workers=num_workers,
+                    collate_fn=operator.itemgetter(
+                        0,
+                    ),  # don't batch, but yield individual elements
+                    worker_init_fn=worker_init_reset_seed,
+                    prefetch_factor=2 if num_workers > 0 else None,
+                    persistent_workers=False,
+                    pin_memory=False,
+                    generator=generator,
+                )  # yield individual mapped dict
             )
-            batch_size = total_batch_size // world_size
-            generator = torch.Generator()
-            generator.manual_seed(cfg.SEED)
-            ratio = cfg.SOLVER.RATIO_PANO360
-            dataloaders = []
-            for i, dataset in enumerate(datasets):
-                dataset = ToIterableDataset(dataset, TrainingSampler(
-                    len(dataset), ratio[i]), shard_chunk_size=batch_size)
-                dataloaders.append(
-                    torchdata.DataLoader(
-                        dataset,
-                        num_workers=num_workers,
-                        collate_fn=operator.itemgetter(
-                            0,
-                        ),  # don't batch, but yield individual elements
-                        worker_init_fn=worker_init_reset_seed,
-                        prefetch_factor=2 if num_workers > 0 else None,
-                        persistent_workers=False,
-                        pin_memory=False,
-                        generator=generator,
-                    )  # yield individual mapped dict
-                )
-            data_loader = AspectRatioGroupedMultipleDataset(
-                dataloaders, [x * batch_size for x in ratio], keys=["coco_data", "calib_data"])
-            return data_loader
-        else:
-            return build_detection_train_loader(
-                cfg, mapper=HybridDataMapper(cfg, is_train=True)
+        data_loader = AspectRatioGroupedMultipleDataset(
+            dataloaders, [x * batch_size for x in ratio], keys=["scale_data", "calib_data"])
+        data_loader_factory = AspectRatioGroupedMultipleDataset if cfg.DATALOADER.ASPECT_RATIO_GROUPING else RatioSampler
+        data_loader = data_loader_factory(
+            dataloaders, [x * batch_size for x in ratio], keys=["scale_data", "calib_data"]
+        )
+        return data_loader
+
+
+class KittyCalibTrainer(DefaultTrainer):
+    @classmethod
+    def build_train_loader(cls, cfg):
+        """
+        Returns:
+            iterablee
+        """
+        total_batch_size = cfg.SOLVER.IMS_PER_BATCH
+        num_workers = cfg.DATALOADER.NUM_WORKERS
+        datasets = [
+            MapDataset(
+                get_detection_dataset_dicts(
+                    "Kitty_train", False, 0, None, check_consistency=True
+                ),
+                DatasetMapper(cfg, is_train=True),
+            ),
+            MapDataset(
+                get_detection_dataset_dicts(
+                    "Pano360_train", False, 0, None, check_consistency=True
+                ),
+                CalibMapper(cfg, is_train=True),
+            ),
+        ]
+        world_size = comm.get_world_size()
+        assert (
+            total_batch_size > 0 and total_batch_size % world_size == 0
+        ), "Total batch size ({}) must be divisible by the number of gpus ({}).".format(
+            total_batch_size,
+            world_size,
+        )
+        batch_size = total_batch_size // world_size
+        generator = torch.Generator()
+        generator.manual_seed(cfg.SEED)
+        ratio = cfg.SOLVER.RATIO_PANO360
+        dataloaders = []
+        for i, dataset in enumerate(datasets):
+            dataset = ToIterableDataset(dataset, TrainingSampler(
+                len(dataset), ratio[i]), shard_chunk_size=batch_size)
+            dataloaders.append(
+                torchdata.DataLoader(
+                    dataset,
+                    num_workers=num_workers,
+                    collate_fn=operator.itemgetter(
+                        0,
+                    ),  # don't batch, but yield individual elements
+                    worker_init_fn=worker_init_reset_seed,
+                    prefetch_factor=2 if num_workers > 0 else None,
+                    persistent_workers=False,
+                    pin_memory=False,
+                    generator=generator,
+                )  # yield individual mapped dict
             )
+        data_loader_factory = AspectRatioGroupedMultipleDataset if cfg.DATALOADER.ASPECT_RATIO_GROUPING else RatioSampler
+        data_loader = data_loader_factory(
+            dataloaders, [x * batch_size for x in ratio], keys=["scale_data", "calib_data"]
+        )
+        return data_loader

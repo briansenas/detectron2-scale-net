@@ -136,6 +136,12 @@ car_bins = np.linspace(1.4, 1.70, 256)  # 'V2CarBins'
 car_bins_lowHigh_list = [[0., 0.], [-0.10, 0.10], [-0.05, 0.05], [-0.10, 0.10], [-0.05, 0.05]]  # 'SmallerBins'
 car_bins_layers_list = make_bins_layers_list(car_bins_lowHigh_list)
 
+COCO_SCALE_STATS = [
+    {"height_mean": 1.75, "height_std": 0.2, "id": 0, "name": "person",
+        "bins": human_bins, "layer_list": human_bins_layers_list},
+    {"height_mean": 1.59, "height_std": 0.2, "id": 2, "name": "car", "bins": car_bins, "layer_list": car_bins_layers_list},
+]
+
 
 def bins2horizon(bins):
     idxes = np.argmax(bins, axis=bins.ndim - 1)

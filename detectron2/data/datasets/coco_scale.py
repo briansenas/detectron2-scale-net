@@ -1,11 +1,11 @@
 import numpy as np
 import torch
-from PIL import Image
 from scipy.io import loadmat
 
 from detectron2.data.datasets.coco import load_coco_json
 from detectron2.structures import BoxMode
 
+import json
 import logging
 import pickle
 import random
@@ -147,3 +147,57 @@ class COCOScale2017Calib(torch.utils.data.Dataset):
 
     def __call__(self):
         return self
+
+
+class KITTICocoDataset:
+    def __init__(
+        self,
+        coco_json_file_path,
+        coco_image_root_path,
+    ):
+        with open(coco_json_file_path, "r") as f:
+            coco = json.load(f)
+
+        self.image_root = Path(coco_image_root_path)
+
+        # Map image_id -> annotations
+        self.img_to_anns = {}
+        for ann in coco["annotations"]:
+            self.img_to_anns.setdefault(ann["image_id"], []).append(ann)
+
+        # Keep only images that have annotations
+        self.images = [
+            img for img in coco["images"]
+            if img["id"] in self.img_to_anns
+        ]
+
+    def __getitem__(self, idx):
+        img = self.images[idx]
+        img_id = img["id"]
+
+        anns = self.img_to_anns[img_id]
+
+        instances = []
+        for ann in anns:
+            instances.append({
+                "bbox": ann["bbox"],
+                "bbox_mode": BoxMode.XYWH_ABS,
+                "category_id": ann["category_id"] - 1,  # 0-based
+            })
+
+        return {
+            "file_name": str(self.image_root / img["file_name"]),
+            "image_id": img_id,
+            "camera_height": 1.65,
+            "annotations": instances,
+        }
+
+    def __len__(self):
+        return len(self.images)
+
+    def __call__(self):
+        return self
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]

@@ -1,6 +1,7 @@
 # output dir
 ugroutput/
 slurmReports
+ugroutput/
 cuda-cache
 tmpdir
 pip-env-create.sh

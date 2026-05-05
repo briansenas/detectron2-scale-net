@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from detectron2.config import configurable
-from detectron2.data.datasets.pano360 import human_bins
+from detectron2.data.datasets.pano360 import COCO_SCALE_STATS, human_bins
 from detectron2.data.detection_utils import person_h_list_loss, prob_to_est
 from detectron2.layers import ShapeSpec, nonzero_tuple
 from detectron2.structures import Boxes, ImageList, Instances, Keypoints, pairwise_iou
@@ -1055,6 +1055,7 @@ class HeightStandardROIHeads(StandardROIHeads):
                 cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES,
             )
             nn.init.normal_(height_cls_score.weight, std=0.01)
+            nn.init.constant_(height_cls_score.bias, 0)
             ret["height_predictor"] = height_predictor
             ret["height_cls_score"] = height_cls_score
             ret["height_mean"] = cfg.MODEL.HEIGHT_MEAN
@@ -1184,9 +1185,9 @@ class HeightStandardROIHeads(StandardROIHeads):
                 pred_instances, losses = self._forward_box_height(features, proposals)
                 with torch.no_grad():
                     pred_instances = self._add_gt_to_pred(pred_instances, targets)
+                del targets
             else:
                 losses.update(self._forward_box(features, proposals))
-            del targets
             # Usually the original proposals used by the box head are used by the mask, keypoint
             # heads. But when `self.train_on_pred_boxes is True`, proposals will contain boxes
             # predicted by the box head.
@@ -1251,9 +1252,6 @@ class HeightStandardROIHeads(StandardROIHeads):
                         proposals_per_image.proposal_boxes = Boxes(pred_boxes_per_image)
         with torch.no_grad():
             pred_instances, _ = self.box_predictor.inference(predictions, proposals)
-        # Note: for multicategory estimation I believe I should do height estimation here
-        # Were the loss would depend on the class type (different a-priori) ussing box_features
-        # And set a new field in pred_instances.
         return pred_instances, losses
 
     def _forward_keypoint_height(
@@ -1261,20 +1259,6 @@ class HeightStandardROIHeads(StandardROIHeads):
         features: Dict[str, torch.Tensor],
         instances: List[Instances],
     ):
-        """
-        Forward logic of the keypoint prediction branch.
-
-        Args:
-            features (dict[str, Tensor]): mapping from feature map names to tensor.
-                Same as in :meth:`ROIHeads.forward`.
-            instances (list[Instances]): the per-image instances to train/predict keypoints.
-                In training, they can be the proposals.
-                In inference, they can be the boxes predicted by R-CNN box head.
-
-        Returns:
-            In training, a dict of losses.
-            In inference, update `instances` with new fields "pred_keypoints" and return it.
-        """
         losses = {}
         if self.training:
             # head is only trained on positive proposals with >=1 visible keypoints.
@@ -1291,7 +1275,8 @@ class HeightStandardROIHeads(StandardROIHeads):
         else:
             features = {f: features[f] for f in self.keypoint_in_features}
         # Copy of keypoint_rcnn_inference that don't save the logits during training.
-        keypoint_rcnn_inference_no_heatmap(self.keypoint_head.layers(features), instances)
+        if self.height_discount_from != "GT":
+            keypoint_rcnn_inference_no_heatmap(self.keypoint_head.layers(features), instances)
         all_person_hs = prob_to_est(
             self.height_cls_score(self.height_predictor(features)), self.human_bins
         )
@@ -1372,6 +1357,7 @@ class CameraHead(ROIHeads):
             cfg.MODEL.CAMERA_HEAD.NUM_CLASSES,
         )
         nn.init.normal_(cls_score.weight, std=0.01)
+        nn.init.constant_(cls_score.bias, 0)
         return {
             "box_in_features": in_features,
             "box_pooler": box_pooler,
