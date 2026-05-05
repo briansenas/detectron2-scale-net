@@ -448,4 +448,4 @@ class HybridDataMapper(DatasetMapper):
         calib_data = []
         for sample in dataset_dict["calib_data"]:
             calib_data.append(self.calib_mapper(sample))
-        return {"coco_data": coco_data, "calib_data": calib_data}
+        return {"scale_data": coco_data, "calib_data": calib_data}

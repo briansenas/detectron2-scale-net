@@ -1066,13 +1066,14 @@ class HeightStandardROIHeads(StandardROIHeads):
                 cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES,
             )
             nn.init.normal_(height_cls_score.weight, std=0.01)
+            nn.init.constant_(height_cls_score.bias, 0)
             ret["height_cls_score"] = height_cls_score
             ret["height_predictor"] = height_predictor
             # Create buffers for fast GPU lookup
             max_id = max(s['id'] for s in COCO_SCALE_STATS) + 1
             means = torch.zeros(max_id)
             stds = torch.zeros(max_id)
-            bins = torch.zeros((max_id, cfg.MODEL.HEIGHT_HEAD.FC_DIM))
+            bins = torch.zeros((max_id, cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES))
             for stat in COCO_SCALE_STATS:
                 idx = stat['id']
                 means[idx] = stat['height_mean']
@@ -1193,18 +1194,21 @@ class HeightStandardROIHeads(StandardROIHeads):
             # NOTE: for multi-cat I would've to edit this forward to always do keypoint_inference_proposals
             # So that for the instances that contain people I get a new field keypoints (hopefully w pointers).
             losses.update(self._forward_keypoint(features, proposals))
-            pred_instances, height_loss = self._forward_height(features, pred_instances)
-            losses.update(height_loss)
-            return pred_instances, losses
+            if self.height_on:
+                pred_instances, height_loss = self._forward_height(features, pred_instances)
+                losses.update(height_loss)
+                return pred_instances, losses
+            else:
+                return proposals, losses
         else:
             if self.height_on:
                 pred_instances, _ = self._forward_box_height(features, proposals)
+                pred_instances, _ = self._forward_height(features, pred_instances)
             else:
                 pred_instances = self._forward_box(features, proposals)
             # During inference cascaded prediction is used: the mask and keypoints heads are only
             # applied to the top scoring box detections.
             pred_instances = self.forward_with_given_boxes(features, pred_instances)
-            pred_instances, _ = self._forward_height(features, pred_instances)
             return pred_instances, {}
 
     def _forward_box_height(
@@ -1351,6 +1355,7 @@ class CameraHead(ROIHeads):
             cfg.MODEL.CAMERA_HEAD.NUM_CLASSES,
         )
         nn.init.normal_(cls_score.weight, std=0.01)
+        nn.init.constant_(cls_score.bias, 0)
         return {
             "box_in_features": in_features,
             "box_pooler": box_pooler,
