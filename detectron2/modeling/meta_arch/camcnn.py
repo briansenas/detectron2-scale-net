@@ -594,7 +594,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         start_y = visualizer.img.shape[0] - padding_bottom - line_height * (n - 1)
         for i, (k, v) in enumerate(items):
             visualizer.draw_text(
-                f"{k}: {v}",
+                f"{k}: {v:.4f}",
                 (x, start_y + i * line_height),
                 color="white",
                 horizontal_alignment="left",
@@ -622,21 +622,21 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 ).cpu().numpy())) if self.height_on else None),
             )
             texts = {}
-            texts["vfov"] = vfov_est[i]
-            texts["pitch"] = pitch_est[i]
-            texts["roll"] = roll_est[i]
-            texts["horizon"] = horizon_est[i]
+            texts["vfov"] = vfov_est[i].detach().cpu().numpy()[0]
+            texts["pitch"] = pitch_est[i].detach().cpu().numpy()[0]
+            texts["roll"] = roll_est[i].detach().cpu().numpy()
+            texts["horizon"] = horizon_est[i].detach().cpu().numpy()
             if self.height_on:
-                texts["yc_estCam"] = camrcnn_data["yc_est"][i][0]
+                texts["yc_estCam"] = camrcnn_data["yc_est"][i][0].detach().cpu().numpy()
             v_pred = self._draw_labels(
                 v_pred,
                 texts,
             )
             prop_img, _ = showHorizonLine(
                 v_pred.get_output().get_image(),
-                vfov_est[i].detach().cpu().numpy(),
-                -pitch_est[i].detach().cpu().numpy(),
-                roll_est[i].detach().cpu().numpy(),
+                texts["vfov"],
+                texts["pitch"],
+                texts["roll"],
             )
             images.append(prop_img)
         return images
@@ -689,21 +689,21 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             )
             if camrcnn_data:
                 texts = {}
-                texts["vfov"] = vfov_est[i]
-                texts["pitch"] = pitch_est[i]
-                texts["roll"] = roll_est[i]
-                texts["horizon"] = horizon_est[i]
+                texts["vfov"] = vfov_est[i].detach().cpu().numpy()[0]
+                texts["pitch"] = pitch_est[i].detach().cpu().numpy()[0]
+                texts["roll"] = roll_est[i].detach().cpu().numpy()
+                texts["horizon"] = horizon_est[i].detach().cpu().numpy()
                 if self.height_on:
-                    texts["yc_estCam"] = camrcnn_data["yc_est"][i][0]
+                    texts["yc_estCam"] = camrcnn_data["yc_est"][i][0].detach().cpu().numpy()
                 v_pred = self._draw_labels(
                     v_pred,
                     texts,
                 )
             prop_img, _ = showHorizonLine(
                 v_pred.get_output().get_image(),
-                vfov_est[i].detach().cpu().numpy(),
-                -pitch_est[i].detach().cpu().numpy(),
-                roll_est[i].detach().cpu().numpy(),
+                texts["vfov"],
+                texts["pitch"],
+                texts["roll"],
             )
             vis_img = np.concatenate((anno_img, prop_img), axis=1)
             vis_img = vis_img.transpose(2, 0, 1)
