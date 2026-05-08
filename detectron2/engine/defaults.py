@@ -906,7 +906,7 @@ class HybridScaleTrainer(DefaultTrainer):
         datasets = [
             MapDataset(
                 get_detection_dataset_dicts(
-                    "COCOScale2017_train", True, 2, None, check_consistency=True
+                    "COCOScale2017_train", True, 2 if cfg.MODEL.KEYPOINT_ON else 0, None, check_consistency=True
                 ),
                 COCOScaleMapper(cfg, is_train=True),
             ),
@@ -967,7 +967,7 @@ class KittyCalibTrainer(DefaultTrainer):
         datasets = [
             MapDataset(
                 get_detection_dataset_dicts(
-                    "Kitty_train", False, 0, None, check_consistency=True
+                    "Kitty_train", True, 0, None, check_consistency=True
                 ),
                 DatasetMapper(cfg, is_train=True),
             ),

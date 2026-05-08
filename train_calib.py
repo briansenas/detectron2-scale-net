@@ -34,7 +34,7 @@ COCO_SCALE_DATASET_NAME = "COCOScale2017_train"
 COCO_SCALE_CALIB_DATASET_NAME = "COCOScale2017Calib_train"
 
 
-def register_datasets(debug: bool = True):
+def register_datasets(keypoint_on: bool = False, debug: bool = True):
     calib_train = CalibDataset(
         train=True,
         json_name="datasets/pano360_crops_dataset_cvpr_myDistWider_train.json",
@@ -89,7 +89,7 @@ def register_datasets(debug: bool = True):
     coco_scale_calib_dataset = COCOScale2017Calib(
         calib_train,
         get_detection_dataset_dicts(
-            COCO_SCALE_DATASET_NAME, True, 2, None, check_consistency=True
+            COCO_SCALE_DATASET_NAME, True, 2 if keypoint_on else 0, None, check_consistency=True
         ),
     )
     DatasetCatalog.register(COCO_SCALE_CALIB_DATASET_NAME, coco_scale_calib_dataset)
@@ -150,7 +150,7 @@ def invoke_main():
 
 def main(args):
     cfg = setup(args)
-    register_datasets(args.debug)
+    register_datasets(cfg.MODEL.KEYPOINT_ON, args.debug)
     if len(cfg.DATASETS.TRAIN) > 1:
         raise ValueError("This is script is not intended for multiple datasets")
     if cfg.DATASETS.TRAIN[0] == PANO_TRAIN_NAME:
