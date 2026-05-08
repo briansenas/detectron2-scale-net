@@ -781,18 +781,25 @@ def fit_vt(yc_fit, vb, v0, vc, y_person_fit, f_pixels_est):
 
 
 def accu_model_batch(dataset_dict: dict):
-    yc_est, vb, y_person, v0, vc, f_pixels_est = (
+    yc_est, vb, pred_height, v0, vc, f_pixels_est = (
         dataset_dict["yc_est"],
         dataset_dict["vb"],
-        dataset_dict["y_person"],
+        dataset_dict["pred_height"],
         dataset_dict["v0"],
         dataset_dict["vc"],
         dataset_dict["f_pixels_est"],
     )
-    if 'pitch_est' in dataset_dict:
-        theta_yannick = dataset_dict['pitch_est']
+    pitch_key = 'pitch'
+    if pitch_key in dataset_dict:
+        # Change the sign of the pitch
+        theta_yannick = - dataset_dict[pitch_key]
     else:
         theta_yannick = torch.atan((vc - v0) / f_pixels_est)
+    y_person = pred_height * torch.cos(theta_yannick)
+    if "straighten_ratio" in dataset_dict:
+        y_person = y_person * dataset_dict["straighten_ratio"]
+
+    # Multiply the height by the pitch value
     z = - (f_pixels_est * yc_est) / (f_pixels_est *
                                      torch.sin(theta_yannick) - (vc - vb) * torch.cos(theta_yannick) + 1e-10)
     vt_camEst = ((f_pixels_est * torch.cos(theta_yannick) + vc * torch.sin(theta_yannick)) * y_person +
@@ -830,31 +837,14 @@ def _add_whole_image_as_proposal(images, device):
     return proposals
 
 
-def pad_to_max(tensor_list, device, max_n, pad_value=0.0):
-    padded = []
-    mask = []
-
-    for t in tensor_list:
-        n = t.shape[0]
-        n_clamped = min(n, max_n)
-
-        # Slice if too large
-        t = t[:max_n]
-
-        pad_n = max_n - n_clamped
-        if pad_n > 0:
-            pad_shape = (pad_n, *t.shape[1:])
-            pad = torch.full(pad_shape, pad_value, device=device, dtype=t.dtype)
-            t = torch.cat([t, pad], dim=0)
-        else:
-            t = t[:max_n]
-
-        padded.append(t)
-
-        m = torch.zeros(max_n, device=device)
-        m[:n_clamped] = 1.0
-        mask.append(m)
-    return torch.stack(padded), torch.stack(mask)
+def pad_to_max(tensor_list, max_n, pad_value=0.0):
+    padded = torch.zeros(
+        (len(tensor_list), max_n, *tensor_list[0].shape[1:]), device=tensor_list[0].device, dtype=tensor_list[0].dtype)
+    for i, t in enumerate(tensor_list):
+        n = min(t.shape[0], max_n)
+        padded[i][:n] = t[:n]
+        padded[i][n:] = padded[i][n:] + pad_value
+    return padded
 
 
 def human_prior(tensor, height_mean, height_std, ):

@@ -1003,7 +1003,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         self.height_mean = height_mean
         self.height_std = height_std
         if height_mean:
-            self.register_buffer("human_bins", torch.as_tensor(human_bins))
+            self.register_buffer("human_bins", torch.as_tensor(human_bins, dtype=torch.float16))
 
     @classmethod
     def _init_keypoint_head(cls, cfg, input_shape):
@@ -1070,21 +1070,15 @@ class HeightStandardROIHeads(StandardROIHeads):
     ):
         matcher = Matcher([iou_thresh], [0, 1], allow_low_quality_matches=False)
         results = []
-
         for preds, gts in zip(pred_instances, gt_instances):
             device = preds.pred_boxes.tensor.device
-
             if len(preds) > 0:
                 pred_boxes = preds.pred_boxes
                 pred_classes = preds.pred_classes
-            else:
-                pred_boxes = torch.zeros((0, 4), device=device)
-                pred_classes = torch.zeros((0,), dtype=torch.long, device=device)
-
-            if len(preds) > 0 and len(gts) > 0:
                 gt_boxes = gts.gt_boxes
                 iou_matrix = pairwise_iou(gt_boxes, pred_boxes)
                 matched_idxs, labels = matcher(iou_matrix)
+                # Positive matches
                 valid_mask = labels == 1
                 # keep only valid matches
                 matched_idxs = matched_idxs[valid_mask]
@@ -1096,20 +1090,20 @@ class HeightStandardROIHeads(StandardROIHeads):
                     else:
                         # e.g. Boxes, BitMasks, etc.
                         gt_fields[k] = v[matched_idxs]
-
+                pred_boxes = pred_boxes.tensor
             else:
+                pred_boxes = torch.zeros((0, 4), device=device)
+                pred_classes = torch.zeros((0,), dtype=torch.long, device=device) - 1  # Set the class to background
                 valid_mask = torch.zeros_like(pred_classes, dtype=torch.bool, device=device)
                 gt_fields = {
                     k: torch.full_like(pred_classes, -1, device=device)
                     for k in gts.get_fields().keys()
                 }
 
-            pred_boxes = pred_boxes.tensor
             valid_mask = torch.ones(pred_boxes.shape[0], dtype=bool, device=device)
-            valid_mask = pad_tensor(valid_mask, self.padded_input_size, 0.0)
-            pred_boxes = pad_tensor(pred_boxes, self.padded_input_size, 0.0)
-            pred_classes = pad_tensor(pred_classes, self.padded_input_size, -1)
             valid_mask = pad_tensor(valid_mask, self.padded_input_size, False)
+            pred_boxes = pad_tensor(pred_boxes, self.padded_input_size, 0)
+            pred_classes = pad_tensor(pred_classes, self.padded_input_size, -1)
 
             inst = Instances(
                 image_size=preds.image_size if len(preds) > 0 else gts.image_size
@@ -1119,23 +1113,22 @@ class HeightStandardROIHeads(StandardROIHeads):
             inst.proposal_boxes = Boxes(pred_boxes)
             inst.pred_classes = pred_classes
             inst.valid_mask = valid_mask
-
+            # Copy fields
             for k, v in gt_fields.items():
                 if k == "gt_classes":
-                    setattr(inst, k, pad_tensor(v, self.padded_input_size, -1).to(device))
-
+                    setattr(inst, k, pad_tensor(v, self.padded_input_size, -1))
                 elif isinstance(v, torch.Tensor):
                     setattr(
-                        inst, k, pad_tensor(v, self.padded_input_size, 0).to(device)
+                        inst, k, pad_tensor(v, self.padded_input_size, 0)
                     )
                 else:
                     if isinstance(v, Boxes):
                         setattr(
-                            inst, k, Boxes(pad_tensor(v.tensor, self.padded_input_size, 0).to(device))
+                            inst, k, Boxes(pad_tensor(v.tensor, self.padded_input_size, 0))
                         )
                     if isinstance(v, Keypoints):
                         setattr(
-                            inst, k, Keypoints(pad_tensor(v.tensor, self.padded_input_size, 0).to(device))
+                            inst, k, Keypoints(pad_tensor(v.tensor, self.padded_input_size, 0))
                         )
             results.append(inst)
         return results
@@ -1383,10 +1376,10 @@ class CameraHead(ROIHeads):
 
     def compute_loss(self, logits, targets):
         assert targets, "'targets' argument is required during training"
-        targets = torch.stack([nn.functional.one_hot(torch.as_tensor(x), num_classes=256).float()
-                              for x in targets]).to(logits.device)
+        targets = torch.as_tensor(targets).to(device=logits.device, dtype=torch.long)
+        targets = torch.nn.functional.one_hot(targets, num_classes=256).to(logits.dtype)
         return nn.functional.kl_div(
-            nn.functional.log_softmax(logits, dim=1),
+            nn.functional.log_softmax(logits, dim=1, dtype=logits.dtype),
             targets,
             reduction="batchmean",
         )
@@ -1496,14 +1489,9 @@ def pad_tensor(x, target_len, pad_value=0):
     """
     Pads or truncates tensor `x` along dim=0 to `target_len`.
     """
+    out = torch.zeros((target_len, *x.shape[1:]), dtype=x.dtype, device=x.device)
     cur_len = x.shape[0]
-
-    if cur_len == target_len:
-        return x
-
-    if cur_len > target_len:
-        return x[:target_len]
-
-    pad_shape = (target_len - cur_len, *x.shape[1:])
-    pad = torch.full(pad_shape, pad_value, dtype=x.dtype, device=x.device)
-    return torch.cat([x, pad], dim=0)
+    n = min(cur_len, target_len)
+    out[:n] = x[:n]
+    out[n:] += pad_value
+    return out
