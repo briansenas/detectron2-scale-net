@@ -617,7 +617,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             prop_img, _ = showHorizonLine(
                 v_pred.get_output().get_image(),
                 texts["vfov"],
-                -texts["pitch"],
+                texts["pitch"],
                 texts["roll"],
             )
             images.append(prop_img)
@@ -678,7 +678,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             prop_img, _ = showHorizonLine(
                 v_pred.get_output().get_image(),
                 texts["vfov"],
-                -texts["pitch"],
+                texts["pitch"],
                 texts["roll"],
             )
             vis_img = np.concatenate((anno_img, prop_img), axis=1)
