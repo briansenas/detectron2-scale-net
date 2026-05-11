@@ -397,6 +397,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         Expects a dict with all the necessary keys, read code below haha
         The accu_model_batch expects the pitch without the - sign
         """
+        # NOTE: This function should not belong to this class but rather be a function call such as fast_rcnn_inference
         # Calculate some variables:
         if not grad_detach:
             # When this function is called, it should be after _camrcnn which detaches pitch, v0 and f_p
@@ -431,7 +432,8 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
     def _pad_to_max_camrcnn(self, predicted_proposals):
         B = len(predicted_proposals)
         if self.training:
-            M = self.padded_input_size
+            # Use at most padded_input_sizes predictions
+            M = min(max([inst.gt_boxes.tensor.shape[0] for inst in predicted_proposals]), self.padded_input_size)
         else:
             M = max([inst.pred_boxes.tensor.shape[0] for inst in predicted_proposals])
         # infer shapes
