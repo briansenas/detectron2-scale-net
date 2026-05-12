@@ -430,7 +430,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
     def _pad_to_max_camrcnn(self, predicted_proposals):
         B = len(predicted_proposals)
         if self.training:
-            M = self.padded_input_size
+            M = min(max([inst.gt_boxes.tensor.shape[0] for inst in predicted_proposals]), self.padded_input_size)
         else:
             M = max([inst.pred_boxes.tensor.shape[0] for inst in predicted_proposals])
         # infer shapes
