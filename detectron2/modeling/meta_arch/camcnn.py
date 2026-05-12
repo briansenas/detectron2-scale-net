@@ -411,6 +411,9 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         eps = camrcnn_data["eps"]
         # call accu model
         vt_camEst_batch, _ = accu_model_batch(camrcnn_data)
+        # To avoid NaNs / inf in huber loss
+        vt_camEst_batch = torch.where(torch.isnan(vt_camEst_batch), torch.zeros_like(vt_camEst_batch), vt_camEst_batch)
+        vt_camEst_batch = vt_camEst_batch * mask 
         loss = smooth_l1_loss(
             vt,
             vt_camEst_batch,

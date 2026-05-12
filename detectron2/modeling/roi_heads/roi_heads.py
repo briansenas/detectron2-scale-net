@@ -974,6 +974,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         padded_input_size: int = 10,
         height_pooler: Optional[ROIPooler] = None,
         height_in_features: Optional[List[str]] = None,
+        height_temperature: Optional[float] = 1.0,
         height_predictor: Optional[nn.Module] = None,
         height_cls_score: Optional[nn.Module] = None,
         height_loss_weight: Optional[float] = None,
@@ -999,6 +1000,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         self.padded_input_size = padded_input_size
         self.height_on = height_cls_score is not None
         self.height_pooler = height_pooler
+        self.height_temperature = height_temperature
         self.height_in_features = height_in_features
         self.height_predictor = height_predictor
         self.height_cls_score = height_cls_score
@@ -1051,6 +1053,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         }
         if cfg.MODEL.HEIGHT_ON:
             ret["height_in_features"] = in_features
+            ret["height_temperature"] = cfg.MODEL.HEIGHT_HEAD.TEMPERATURE
             ret["height_pooler"] = ROIPooler(
                 output_size=pooler_resolution,
                 scales=pooler_scales,
