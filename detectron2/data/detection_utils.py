@@ -852,9 +852,15 @@ def person_h_list_loss(all_person_hs, height_mean, height_std, num_instances):
     return -torch.mean(
         torch.stack(
             [
-                torch.mean(prob_all_person_h) if prob_all_person_h.numel(
-                ) > 1 else torch.zeros(1)[0].to(all_person_hs.device)
+                torch.mean(prob_all_person_h)
                 for prob_all_person_h in prob_all_person_h_list
+                # To deal with empty predictions in a batch
+                if prob_all_person_h.numel() > 0
             ]
         )
     )
+
+
+def person_h_list_loss_masked(all_person_hs, height_mean, height_std, mask):
+    prob_all_person_hs = human_prior(all_person_hs, height_mean, height_std)
+    return -((prob_all_person_hs * mask).sum(dim=1) / mask.sum(dim=1).clamp(torch.finfo(prob_all_person_hs.dtype).eps)).mean()
