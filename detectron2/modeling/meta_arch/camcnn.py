@@ -24,7 +24,7 @@ from detectron2.data.detection_utils import (
     convert_image_to_rgb,
     get_straighten_ratio_from_kps,
     pad_to_max,
-    person_h_list_loss,
+    person_h_list_loss_masked,
     prob_to_est,
 )
 from detectron2.layers import move_device_like
@@ -782,7 +782,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
 
     def _camrcnn_refine(self, camrcnn_data):
         mask = camrcnn_data["mask"]
-        eps = camrcnn_data["eps"]
         h_losses = []
         vt_losses = []
         # NOTE: In the original SVMIW he saves intermediate states before each refine to have the vt_loss (due to new yc)
@@ -833,16 +832,14 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             )
             vt_losses.append(vt_loss)
             height_loss = (
-                person_h_list_loss(
+                person_h_list_loss_masked(
                     camrcnn_data["pred_height"],
                     self.roi_heads.height_mean,
                     self.roi_heads.height_std,
-                    camrcnn_data["pred_height"].shape[1]
+                    mask,
                 ) *
-                mask *
                 self.roi_heads.height_loss_weight
             )
-            height_loss = (height_loss.sum(dim=1) / (mask.sum(dim=1) + eps)).mean()
             h_losses.append(height_loss)
         # Since d2 sum all losses by default in DefaultTrainer we return the average layer loss.
         # We could also return only the last layer loss or implement custom loss management
