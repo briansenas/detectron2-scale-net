@@ -974,6 +974,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         padded_input_size: int = 10,
         height_predictor: Optional[nn.Module] = None,
         height_cls_score: Optional[nn.Module] = None,
+        height_temperature: Optional[float] = 1.0,
         height_loss_weight: Optional[float] = None,
         height_mean: Optional[float] = None,
         height_std: Optional[float] = None,
@@ -997,6 +998,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         self.padded_input_size = padded_input_size
         self.height_loss_weight = height_loss_weight
         self.height_on = height_predictor is not None
+        self.height_temperature = height_temperature
         self.height_discount_from = height_discount_from
         self.height_predictor = height_predictor
         self.height_cls_score = height_cls_score
@@ -1045,6 +1047,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         # We will have the same predictor as Jerry
         if cfg.MODEL.HEIGHT_ON:
             ret["height_loss_weight"] = cfg.MODEL.HEIGHT_HEAD.LOSS_WEIGHT
+            ret["height_temperature"] = cfg.MODEL.HEIGHT_HEAD.TEMPERATURE
             ret["height_discount_from"] = cfg.MODEL.HEIGHT_HEAD.DISCOUNT_FROM
             height_predictor = FastRCNNConvFCHeadHeight(
                 cfg,
@@ -1272,7 +1275,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         if self.height_discount_from != "GT":
             keypoint_rcnn_inference_no_heatmap(self.keypoint_head.layers(features), instances)
         all_person_hs = prob_to_est(
-            self.height_cls_score(self.height_predictor(features)), self.human_bins
+            self.height_cls_score(self.height_predictor(features)) / self.height_temperature, self.human_bins
         )
         del features
         num_instances_per_image = [len(i) for i in instances]
