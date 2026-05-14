@@ -4,12 +4,13 @@ from detectron2.config import get_cfg
 from detectron2.data import DatasetCatalog, MetadataCatalog
 from detectron2.data.build import get_detection_dataset_dicts
 from detectron2.data.datasets.builtin_meta import _get_builtin_metadata
-from detectron2.data.datasets.coco_scale import COCOScale2017, COCOScale2017Calib
+from detectron2.data.datasets.coco_scale import COCOScale2017, COCOScale2017Calib, KITTICocoDataset
 from detectron2.data.datasets.pano360 import CalibDataset
 from detectron2.engine import (
     CalibTrainer,
     COCOScaleTrainer,
     HybridScaleTrainer,
+    KittyCalibTrainer,
     default_argument_parser,
     default_setup,
     launch,
@@ -32,6 +33,12 @@ PANO_TRAIN_NAME = "Pano360_train"
 PANO_VAL_NAME = "Pano360_val"
 COCO_SCALE_DATASET_NAME = "COCOScale2017_train"
 COCO_SCALE_CALIB_DATASET_NAME = "COCOScale2017Calib_train"
+
+KITTY_TRAIN_NAME = "Kitty_train"
+KITTY_ROOT = os.path.join("data", "Kitty")
+KITTY_IMAGE_DIR = os.path.join(KITTY_ROOT, "data_object_image_2", "training", "image_2")
+KITTY_LABEL_DIR = os.path.join(KITTY_ROOT, "data_object_label_2", "training", "label_2")
+KITTY_OUTPUT_JSON = os.path.join("data", "Kitty", "kitti_coco.json")
 
 
 def register_datasets(keypoint_on: bool = False, debug: bool = True):
@@ -100,6 +107,18 @@ def register_datasets(keypoint_on: bool = False, debug: bool = True):
         **coco_meta,
         thing_dataset_id_to_contiguous_id={1: 0},  # COCO ID 1 → internal ID 0
     )
+    kitty_dataset_name = "Kitty_train"
+    DatasetCatalog.register(
+        kitty_dataset_name,
+        KITTICocoDataset(
+            KITTY_OUTPUT_JSON,
+            KITTY_IMAGE_DIR,
+        )
+    )
+    coco_meta = _get_builtin_metadata("coco")
+    MetadataCatalog.get(kitty_dataset_name).set(
+        thing_dataset_id_to_contiguous_id={1: 0, 3: 1}  # COCO ID 1 → internal ID 0
+    )
 
 
 def setup(args):
@@ -159,6 +178,8 @@ def main(args):
         trainer = COCOScaleTrainer(cfg)
     elif cfg.DATASETS.TRAIN[0] == COCO_SCALE_CALIB_DATASET_NAME:
         trainer = HybridScaleTrainer(cfg)
+    elif cfg.DATASETS.TRAIN[0] == KITTY_TRAIN_NAME:
+        trainer = KittyCalibTrainer(cfg)
     else:
         raise ValueError(
             "This file is not made for datasets outside %s and cfg is %s"
@@ -167,6 +188,7 @@ def main(args):
                     PANO_TRAIN_NAME,
                     COCO_SCALE_CALIB_DATASET_NAME,
                     COCO_SCALE_CALIB_DATASET_NAME,
+                    KITTY_TRAIN_NAME,
                 },
                 cfg.DATASETS.TRAIN,
             )

@@ -978,6 +978,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         height_predictor: Optional[nn.Module] = None,
         height_cls_score: Optional[nn.Module] = None,
         height_loss_weight: Optional[float] = None,
+        class_ids_to_idx: Optional[dict] = None,
         class_means: Optional[torch.tensor] = None,
         class_stds: Optional[torch.tensor] = None,
         class_bins: Optional[torch.tensor] = None,
@@ -1005,6 +1006,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         self.height_predictor = height_predictor
         self.height_cls_score = height_cls_score
         self.height_loss_weight = height_loss_weight
+        self.class_ids_to_idx = class_ids_to_idx
         self.register_buffer("class_means", class_means)
         self.register_buffer("class_stds", class_stds)
         self.register_buffer("class_bins", class_bins)
@@ -1073,15 +1075,19 @@ class HeightStandardROIHeads(StandardROIHeads):
             ret["height_cls_score"] = height_cls_score
             ret["height_predictor"] = height_predictor
             # Create buffers for fast GPU lookup
-            max_id = max(s['id'] for s in COCO_SCALE_STATS) + 1
+            max_id = len(COCO_SCALE_STATS)
             means = torch.zeros(max_id)
             stds = torch.zeros(max_id)
             bins = torch.zeros((max_id, cfg.MODEL.HEIGHT_HEAD.NUM_CLASSES))
-            for stat in COCO_SCALE_STATS:
+            ids_to_idx = {}
+            for i, stat in enumerate(COCO_SCALE_STATS):
                 idx = stat['id']
-                means[idx] = stat['height_mean']
-                stds[idx] = stat['height_std']
-                bins[idx] = torch.as_tensor(stat['bins'])
+                ids_to_idx[idx] = i
+                means[i] = stat['height_mean']
+                stds[i] = stat['height_std']
+                bins[i] = torch.as_tensor(stat['bins'])
+            ids_to_idx[-1] = -1
+            ret["class_ids_to_idx"] = ids_to_idx
             ret["class_means"] = means
             ret["class_stds"] = stds
             ret["class_bins"] = bins
@@ -1120,7 +1126,6 @@ class HeightStandardROIHeads(StandardROIHeads):
                         gt_fields[k] = v[matched_idxs]
                 pred_boxes = pred_boxes.tensor
             else:
-                print("Empty prediction set?")
                 pred_boxes = torch.zeros((0, 4), device=device)
                 pred_classes = torch.zeros((0,), dtype=torch.long, device=device) - 1  # Set the class to background
                 valid_mask = torch.zeros_like(pred_classes, dtype=torch.bool, device=device)
@@ -1274,17 +1279,22 @@ class HeightStandardROIHeads(StandardROIHeads):
         features = self.height_pooler(features, boxes)
 
         training_cls_ids = torch.cat([x.gt_classes if self.training else x.pred_classes for x in instances])
+        training_class_idxs = torch.tensor(
+            [self.class_ids_to_idx[int(c)] for c in training_cls_ids],
+            device=training_cls_ids.device,
+            dtype=torch.int,
+        )
         all_person_hs = prob_to_est(
             self.height_cls_score(self.height_predictor(features)),
-            self.class_bins[training_cls_ids])
+            self.class_bins[training_class_idxs])
         del features
         losses = {}
         num_instances = [len(p) for p in instances]
         if self.training:
             losses["height_loss"] = person_h_list_loss(
                 all_person_hs,
-                self.class_means[training_cls_ids],
-                self.class_stds[training_cls_ids],
+                self.class_means[training_class_idxs],
+                self.class_stds[training_class_idxs],
                 num_instances,
             ) * self.height_loss_weight
             for height, prop in zip(all_person_hs.split(num_instances), instances):
