@@ -1,10 +1,4 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-import copy
-import itertools
-import logging
-from collections import defaultdict
-from enum import Enum
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Type, Union
 import torch
 from fvcore.common.param_scheduler import (
     CosineParamScheduler,
@@ -14,6 +8,13 @@ from fvcore.common.param_scheduler import (
 
 from detectron2.config import CfgNode
 from detectron2.utils.env import TORCH_VERSION
+
+import copy
+import itertools
+import logging
+from collections import defaultdict
+from enum import Enum
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Type, Union
 
 from .lr_scheduler import LRMultiplier, LRScheduler, WarmupParamScheduler
 
@@ -139,6 +140,32 @@ def build_optimizer(cfg: CfgNode, model: torch.nn.Module) -> torch.optim.Optimiz
     return maybe_add_gradient_clipping(cfg, torch.optim.SGD(**sgd_args))
 
 
+def build_optimizer_overrides(cfg: CfgNode, model: torch.nn.Module,
+                              overrides: Optional[Dict[str, Dict[str, float]]] = None,
+                              ) -> torch.optim.Optimizer:
+    """
+    Build an optimizer from config.
+    """
+    params = get_default_optimizer_params(
+        model,
+        base_lr=cfg.SOLVER.BASE_LR,
+        weight_decay_norm=cfg.SOLVER.WEIGHT_DECAY_NORM,
+        bias_lr_factor=cfg.SOLVER.BIAS_LR_FACTOR,
+        weight_decay_bias=cfg.SOLVER.WEIGHT_DECAY_BIAS,
+        overrides=overrides,
+    )
+    sgd_args = {
+        "params": params,
+        "lr": cfg.SOLVER.BASE_LR,
+        "momentum": cfg.SOLVER.MOMENTUM,
+        "nesterov": cfg.SOLVER.NESTEROV,
+        "weight_decay": cfg.SOLVER.WEIGHT_DECAY,
+    }
+    if TORCH_VERSION >= (1, 12):
+        sgd_args["foreach"] = True
+    return maybe_add_gradient_clipping(cfg, torch.optim.SGD(**sgd_args))
+
+
 def get_default_optimizer_params(
     model: torch.nn.Module,
     base_lr: Optional[float] = None,
@@ -230,7 +257,8 @@ def get_default_optimizer_params(
             if lr_factor_func is not None:
                 hyperparams["lr"] *= lr_factor_func(f"{module_name}.{module_param_name}")
 
-            hyperparams.update(overrides.get(module_param_name, {}))
+            # This way we can set a whole module learning rate
+            hyperparams.update(overrides.get(module_name.split(".")[0], {}))
             params.append({"params": [value], **hyperparams})
     return reduce_param_groups(params)
 

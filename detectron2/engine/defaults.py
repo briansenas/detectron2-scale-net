@@ -20,7 +20,6 @@ from detectron2.data import (
     CalibMapper,
     COCOScaleMapper,
     DatasetMapper,
-    HybridDataMapper,
     MapDataset,
     MetadataCatalog,
     build_detection_test_loader,
@@ -42,7 +41,7 @@ from detectron2.evaluation import (
     verify_results,
 )
 from detectron2.modeling import build_model
-from detectron2.solver import build_lr_scheduler, build_optimizer
+from detectron2.solver import build_lr_scheduler, build_optimizer, build_optimizer_overrides
 from detectron2.utils import comm
 from detectron2.utils.collect_env import collect_env_info
 from detectron2.utils.env import seed_all_rng
@@ -886,7 +885,20 @@ class COCOScaleTrainer(DefaultTrainer):
         return build_detection_train_loader(cfg, mapper=COCOScaleMapper(cfg, is_train=True))
 
 
-class HybridScaleTrainer(DefaultTrainer):
+class HybridTrainer(DefaultTrainer):
+    @classmethod
+    def build_optimizer(cls, cfg, model):
+        """
+        Returns:
+            torch.optim.Optimizer:
+
+        It now calls :func:`detectron2.solver.build_optimizer`.
+        Overwrite it if you'd like a different optimizer.
+        """
+        return build_optimizer_overrides(cfg, model, overrides={"camera_heads": {"lr": cfg.SOLVER.BASE_LR / (cfg.SOLVER.RATIO_PANO360[0])}})
+
+
+class HybridScaleTrainer(HybridTrainer):
     @classmethod
     def build_test_loader(cls, cfg, dataset_name):
         """
@@ -955,7 +967,7 @@ class HybridScaleTrainer(DefaultTrainer):
         return data_loader
 
 
-class KittyCalibTrainer(DefaultTrainer):
+class KittyCalibTrainer(HybridTrainer):
     @classmethod
     def build_train_loader(cls, cfg):
         """

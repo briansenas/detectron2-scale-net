@@ -151,6 +151,11 @@ def build_args():
         type=str,
         help="Filter state dict for weights containing this key.",
     )
+    parser.add_argument(
+        "--freeze-backbone",
+        action="store_true",
+        help="To freeze the backbone of the model. Useful if we intented to initialize the camera classifier heads",
+    )
     return parser.parse_args()
 
 
@@ -222,6 +227,8 @@ def main(args):
         print("Unexpected keys:", unexpected)
     else:
         trainer.resume_or_load(resume=args.resume)
+    if args.freeze_backbone:
+        trainer.model.backbone.eval()
     trainer.train()
 
 

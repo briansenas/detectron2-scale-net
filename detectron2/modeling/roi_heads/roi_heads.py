@@ -1184,13 +1184,7 @@ class HeightStandardROIHeads(StandardROIHeads):
 
         if self.training:
             losses = {}
-            if self.height_on:
-                pred_instances, losses = self._forward_box_height(features, proposals)
-                with torch.no_grad():
-                    pred_instances = self._add_gt_to_pred(pred_instances, targets)
-                del targets
-            else:
-                losses.update(self._forward_box(features, proposals))
+            losses.update(self._forward_box(features, proposals))
             # Usually the original proposals used by the box head are used by the mask, keypoint
             # heads. But when `self.train_on_pred_boxes is True`, proposals will contain boxes
             # predicted by the box head.
@@ -1199,66 +1193,19 @@ class HeightStandardROIHeads(StandardROIHeads):
             # So that for the instances that contain people I get a new field keypoints (hopefully w pointers).
             losses.update(self._forward_keypoint(features, proposals))
             if self.height_on:
-                pred_instances, height_loss = self._forward_height(features, pred_instances)
+                pred_instances, height_loss = self._forward_height(features, targets)
                 losses.update(height_loss)
-                return pred_instances, losses
+                return proposals, pred_instances, losses
             else:
-                return proposals, losses
+                return proposals, [], losses
         else:
+            pred_instances = self._forward_box(features, proposals)
             if self.height_on:
-                pred_instances, _ = self._forward_box_height(features, proposals)
                 pred_instances, _ = self._forward_height(features, pred_instances)
-            else:
-                pred_instances = self._forward_box(features, proposals)
             # During inference cascaded prediction is used: the mask and keypoints heads are only
             # applied to the top scoring box detections.
             pred_instances = self.forward_with_given_boxes(features, pred_instances)
             return pred_instances, {}
-
-    def _forward_box_height(
-        self,
-        features: Dict[str, torch.Tensor],
-        proposals: List[Instances],
-    ):
-        """
-        Forward logic of the box prediction branch. If `self.train_on_pred_boxes is True`,
-            the function puts predicted boxes in the `proposal_boxes` field of `proposals` argument.
-
-        Args:
-            features (dict[str, Tensor]): mapping from feature map names to tensor.
-                Same as in :meth:`ROIHeads.forward`.
-            proposals (list[Instances]): the per-image object proposals with
-                their matching ground truth.
-                Each has fields "proposal_boxes", and "objectness_logits",
-                "gt_classes", "gt_boxes".
-
-        Returns:
-            In training, a dict of losses.
-            In inference, a list of `Instances`, the predicted instances.
-        """
-        features = [features[f] for f in self.box_in_features]
-        box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
-        box_features = self.box_head(box_features)
-        predictions = self.box_predictor(box_features)
-        del box_features
-        losses = {}
-        if self.training:
-            losses = self.box_predictor.losses(predictions, proposals)
-            # proposals is modified in-place below, so losses must be computed first.
-            if self.train_on_pred_boxes:
-                with torch.no_grad():
-                    pred_boxes = self.box_predictor.predict_boxes_for_gt_classes(
-                        predictions,
-                        proposals,
-                    )
-                    for proposals_per_image, pred_boxes_per_image in zip(
-                        proposals,
-                        pred_boxes,
-                    ):
-                        proposals_per_image.proposal_boxes = Boxes(pred_boxes_per_image)
-        with torch.no_grad():
-            pred_instances, _ = self.box_predictor.inference(predictions, proposals)
-        return pred_instances, losses
 
     def _forward_height(
         self,
@@ -1272,12 +1219,13 @@ class HeightStandardROIHeads(StandardROIHeads):
             # head is only trained on positive proposals with >=1 visible keypoints.
             instances, _ = select_foreground_proposals(instances, self.num_classes)
 
+        losses = {}
+        num_instances = [len(p) for p in instances]
         features = [features[f] for f in self.height_in_features]
         boxes = [
             x.gt_boxes if self.training else x.pred_boxes for x in instances
         ]
         features = self.height_pooler(features, boxes)
-
         training_cls_ids = torch.cat([x.gt_classes if self.training else x.pred_classes for x in instances])
         training_class_idxs = torch.tensor(
             [self.class_ids_to_idx[int(c)] for c in training_cls_ids],
@@ -1285,11 +1233,9 @@ class HeightStandardROIHeads(StandardROIHeads):
             dtype=torch.int,
         )
         all_person_hs = prob_to_est(
-            self.height_cls_score(self.height_predictor(features)),
+            self.height_cls_score(self.height_predictor(features)) / self.height_temperature,
             self.class_bins[training_class_idxs])
         del features
-        losses = {}
-        num_instances = [len(p) for p in instances]
         if self.training:
             losses["height_loss"] = person_h_list_loss(
                 all_person_hs,
@@ -1297,8 +1243,8 @@ class HeightStandardROIHeads(StandardROIHeads):
                 self.class_stds[training_class_idxs],
                 num_instances,
             ) * self.height_loss_weight
-            for height, prop in zip(all_person_hs.split(num_instances), instances):
-                prop.pred_height = height
+        for height, prop in zip(all_person_hs.split(num_instances), instances):
+            prop.pred_height = height
         return instances, losses
 
 
@@ -1391,7 +1337,7 @@ class CameraHead(ROIHeads):
     def compute_loss(self, logits, targets):
         assert targets, "'targets' argument is required during training"
         targets = torch.as_tensor(targets).to(device=logits.device, dtype=torch.long)
-        targets = torch.nn.functional.one_hot(targets, num_classes=256).to(logits.dtype)
+        targets = torch.nn.functional.one_hot(targets, num_classes=logits.shape[1]).to(logits.dtype)
         return nn.functional.kl_div(
             nn.functional.log_softmax(logits, dim=1, dtype=logits.dtype),
             targets,
