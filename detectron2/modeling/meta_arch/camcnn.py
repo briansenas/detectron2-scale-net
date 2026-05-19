@@ -206,24 +206,44 @@ class CameraRCNN(nn.Module):
             proposals (list): a list that contains predicted proposals. Both
                 batched_inputs and proposals should have the same length.
         """
+        from detectron2.utils.visualizer import Visualizer
         storage = get_event_storage()
         input = batched_inputs[0]
         pitch_logits = proposals["pitch_logits"][0].detach().cpu().numpy().squeeze()
         roll_logits = proposals["roll_logits"][0].detach().cpu().numpy().squeeze()
         vfov_logits = proposals["vfov_logits"][0].detach().cpu().numpy().squeeze()
+        horizon_logits = proposals["horizon_logits"][0].detach().cpu().numpy().squeeze()
         img = input["image"]
         img = convert_image_to_rgb(img.permute(1, 2, 0), self.input_format)
         pitch = bins2pitch(pitch_logits)
         roll = bins2roll(roll_logits)
         vfov = bins2vfov(vfov_logits)
+        horizon = bins2horizon(horizon_logits)
         gt_pitch = bins2pitch(nn.functional.one_hot(torch.as_tensor(
             input["logits"]["gt_pitch"]), num_classes=len(pitch_logits)).float())
         gt_roll = bins2roll(nn.functional.one_hot(torch.as_tensor(
             input["logits"]["gt_roll"]), num_classes=len(roll_logits)).float())
         gt_vfov = bins2vfov(nn.functional.one_hot(torch.as_tensor(
             input["logits"]["gt_vfov"]), num_classes=len(vfov_logits)).float())
+        gt_horizon = bins2horizon(nn.functional.one_hot(torch.as_tensor(
+            input["logits"]["gt_horizon"]), num_classes=len(horizon_logits)).float())
         anno_img, _ = showHorizonLine(img, gt_vfov, gt_pitch, gt_roll)
         prop_img, _ = showHorizonLine(img, vfov, pitch, roll)
+        v_gt = Visualizer(anno_img, None)
+        v_pred = Visualizer(prop_img, None)
+        texts = {}
+        texts["pitch"] = gt_pitch
+        texts["roll"] = gt_roll
+        texts["vfov"] = gt_pitch
+        texts["horizon"] = gt_horizon
+        v_gt = draw_labels(v_gt, texts)
+        texts["pitch"] = pitch
+        texts["roll"] = roll
+        texts["vfov"] = pitch
+        texts["horizon"] = horizon
+        v_pred = draw_labels(v_pred, texts)
+        anno_img = v_gt.get_output().get_image()
+        prop_img = v_pred.get_output().get_image()
         vis_img = np.concatenate((anno_img, prop_img), axis=1)
         vis_img = vis_img.transpose(2, 0, 1)
         vis_name = "Left: GT Horizon;  Right: Predicted Horizon"
@@ -587,26 +607,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         # losses.update({"consistency_loss": loss_consistency})
         return camrcnn_data, losses
 
-    def _draw_labels(self, visualizer, texts):
-        x = 10  # left padding
-        line_height = 15
-        padding_bottom = 30
-        items = sorted(texts.items())
-        n = len(items)
-
-        # Start above left bottom corner
-        start_y = visualizer.img.shape[0] - padding_bottom - line_height * (n - 1)
-        for i, (k, v) in enumerate(items):
-            visualizer.draw_text(
-                f"{k}: {v:.4f}",
-                (x, start_y + i * line_height),
-                color="white",
-                horizontal_alignment="left",
-                font_size=10
-            )
-
-        return visualizer
-
     def visualize_prediction(self, batched_inputs, instances, camrcnn_data: dict):
         from detectron2.utils.visualizer import Visualizer
         max_vis_prop = 10
@@ -629,7 +629,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             texts["horizon"] = horizon_est[i].detach().cpu().numpy()
             if self.height_on:
                 texts["yc_estCam"] = camrcnn_data["yc_est"][i][0].detach().cpu().numpy()
-            v_pred = self._draw_labels(
+            v_pred = draw_labels(
                 v_pred,
                 texts,
             )
@@ -667,7 +667,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                     texts[col] = input[col]
                 if self.height_on:
                     texts["yc_estCam"] = input["yc_estCam"]
-                v_gt = self._draw_labels(v_gt, texts)
+                v_gt = draw_labels(v_gt, texts)
                 gt_pitch, gt_vfov, gt_roll = input["pitch"], input["vfov"], input["roll"]
                 anno_img, _ = showHorizonLine(
                     v_gt.get_output().get_image(), gt_vfov, gt_pitch, gt_roll
@@ -687,7 +687,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 texts["horizon"] = horizon_est[i].detach().cpu().numpy()
                 if self.height_on:
                     texts["yc_estCam"] = camrcnn_data["yc_est"][i][0].detach().cpu().numpy()
-                v_pred = self._draw_labels(
+                v_pred = draw_labels(
                     v_pred,
                     texts,
                 )
@@ -998,15 +998,36 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         texts["roll"] = gt_roll
         texts["vfov"] = gt_pitch
         texts["horizon"] = gt_horizon
-        v_gt = self._draw_labels(v_gt, texts)
+        v_gt = draw_labels(v_gt, texts)
         texts["pitch"] = pitch
         texts["roll"] = roll
         texts["vfov"] = pitch
         texts["horizon"] = horizon
-        v_pred = self._draw_labels(v_pred, texts)
+        v_pred = draw_labels(v_pred, texts)
         anno_img = v_gt.get_output().get_image()
         prop_img = v_pred.get_output().get_image()
         vis_img = np.concatenate((anno_img, prop_img), axis=1)
         vis_img = vis_img.transpose(2, 0, 1)
         vis_name = "Left: GT Horizon;  Right: Predicted Horizon"
         storage.put_image(vis_name, vis_img)
+
+
+def draw_labels(visualizer, texts):
+    x = 10  # left padding
+    line_height = 15
+    padding_bottom = 30
+    items = sorted(texts.items())
+    n = len(items)
+
+    # Start above left bottom corner
+    start_y = visualizer.img.shape[0] - padding_bottom - line_height * (n - 1)
+    for i, (k, v) in enumerate(items):
+        visualizer.draw_text(
+            f"{k}: {v:.4f}",
+            (x, start_y + i * line_height),
+            color="white",
+            horizontal_alignment="left",
+            font_size=10
+        )
+
+    return visualizer
