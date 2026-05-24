@@ -877,8 +877,8 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         dt_logits = {k: v[:len(dt_inputs)] for k, v in cls_logits.items()}
         vfov_est, pitch_est, roll_est, horizon_est = self._get_camera_values(dt_logits)
         camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, "horizon_est": horizon_est}
-        camera_height_key = "camera_height"
-        if camera_height_key in dt_inputs[0]:
+        if not self.point_net_on:
+            camera_height_key = "camera_height"
             camrcnn_data["yc_est"] = torch.as_tensor(
                 [x[camera_height_key] for x in dt_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)
         if self.height_on:
@@ -913,9 +913,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         do_postprocess: bool = True,
     ):
         assert not self.training
-        if "scale_data" in batched_inputs[0]:
-            dt_inputs, cam_inputs = self._parse_dt_cam_inputs(batched_inputs)
-            batched_inputs = dt_inputs + cam_inputs
         images = self.preprocess_image(batched_inputs)
         features = self.backbone(images.tensor)
 
@@ -938,10 +935,10 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         cam_logits, _ = self.camera_heads(features, _add_whole_image_as_proposal(images, self.device), None)
         vfov_est, pitch_est, roll_est, horizon_est = self._get_camera_values(cam_logits)
         camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, "horizon_est": horizon_est}
-        camera_height_key = "camera_height"
-        if camera_height_key in batched_inputs[0]:
+        if not self.point_net_on:
+            camera_height_key = "camera_height"
             camrcnn_data["yc_est"] = torch.as_tensor(
-                [x[camera_height_key] for x in dt_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)
+                [x[camera_height_key] for x in batched_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)
         if self.height_on:
             camrcnn_data, _ = self._camrcnn_predictions(
                 results,
