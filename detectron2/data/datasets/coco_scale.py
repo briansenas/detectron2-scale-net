@@ -85,7 +85,7 @@ class COCOScale2017:
             roll = camera_parameters["roll"][0][0].astype(np.float32)
             horizon = camera_parameters["horizon"][0][0].astype(np.float32)
         instances = []
-        for bbox, kps in zip(bboxes, kps_gt):
+        for bbox, kps in zip(bboxes[:10], kps_gt):
             instances.append(dict(
                 bbox=bbox.tolist(),
                 bbox_mode=BoxMode.XYWH_ABS,

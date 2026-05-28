@@ -673,8 +673,19 @@ def softmax_with_bins(input, bins):
 def argmax_with_bins(input, bins):
     # input: [N, D], bins: [D]
     # return: [N]
-    idxx = torch.argmax(input, dim=1)
-    est_batch = bins[idxx]
+    if bins.dim() == 1:
+        idxx = torch.argmax(input, dim=1)
+        est_batch = bins[idxx]
+    else:
+        # input: [N, D], bins: [N, D]
+        # return: [N]
+        N, D = input.shape
+
+        # Get the index of the max logit for each row: [N]
+        idxx = torch.argmax(input, dim=1)
+        # Use advanced indexing to pick the bin at (row_i, idxx_i)
+        # bins[0, idxx[0]], bins[1, idxx[1]], ...
+        est_batch = bins[torch.arange(N), idxx]
     return est_batch
 
 
@@ -863,7 +874,7 @@ def person_h_list_loss(all_person_hs, height_mean, height_std, num_instances):
         )
     )
 
+
 def person_h_list_loss_masked(all_person_hs, height_mean, height_std, mask):
     prob_all_person_hs = human_prior(all_person_hs, height_mean, height_std)
     return -((prob_all_person_hs * mask).sum(dim=1) / mask.sum(dim=1).clamp(torch.finfo(prob_all_person_hs.dtype).eps)).mean()
-

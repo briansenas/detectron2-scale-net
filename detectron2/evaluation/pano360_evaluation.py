@@ -15,26 +15,19 @@ class Pano360Evaluator(DatasetEvaluator):
         self.vfov_loss = 0
 
     def process(self, inputs, outputs):
-        self.horizon_loss = nn.functional.kl_div(
-            nn.functional.log_softmax(outputs["horizon_logits"], dim=1),
-            torch.stack([x["logits"]["gt_horizon"] for x in inputs]),
-            reduction="batchmean",
-        )
-        self.pitch_loss = nn.functional.kl_div(
-            nn.functional.log_softmax(outputs["pitch_logits"], dim=1),
-            torch.stack([x["logits"]["gt_pitch"] for x in inputs]),
-            reduction="batchmean",
-        )
-        self.roll_loss = nn.functional.kl_div(
-            nn.functional.log_softmax(outputs["roll_logits"], dim=1),
-            torch.stack([x["logits"]["gt_roll"] for x in inputs]),
-            reduction="batchmean",
-        )
-        self.vfov_loss = nn.functional.kl_div(
-            nn.functional.log_softmax(outputs["vfov_logits"], dim=1),
-            torch.stack([x["logits"]["gt_vfov"] for x in inputs]),
-            reduction="batchmean",
-        )
+        for key in ["horizon", "pitch", "roll", "vfov"]:
+            logits = outputs[f"{key}_logits"]
+            targets = torch.as_tensor([x["logits"][f"gt_{key}"] for x in inputs]).to(device=logits.device)
+            targets = torch.nn.functional.one_hot(targets, num_classes=logits.shape[1]).to(logits.dtype)
+            setattr(
+                self,
+                f"{key}_loss",
+                nn.functional.kl_div(
+                    nn.functional.log_softmax(logits, dim=1, dtype=logits.dtype),
+                    targets,
+                    reduction="batchmean",
+                ),
+            )
 
     def evaluate(self):
         all_loss = comm.all_gather(

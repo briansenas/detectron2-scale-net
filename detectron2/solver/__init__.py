@@ -1,5 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-from .build import build_lr_scheduler, build_optimizer, get_default_optimizer_params
+from .build import build_lr_scheduler, build_optimizer, get_default_optimizer_params, build_optimizer_overrides
 from .lr_scheduler import (
     LRMultiplier,
     LRScheduler,

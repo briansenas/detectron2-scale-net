@@ -196,7 +196,7 @@ class CameraRCNN(nn.Module):
         images = self.preprocess_image(batched_inputs)
         features = self.backbone(images.tensor)
         proposals = _add_whole_image_as_proposal(images, self.device)
-        results, _ = self.camera_heads(images, features, proposals, None)
+        results, _ = self.camera_heads(features, proposals, None)
         return results
 
     def visualize_training(self, batched_inputs, proposals):
@@ -434,14 +434,17 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         B = len(predicted_proposals)
         if self.training:
             M = min(max([inst.gt_boxes.tensor.shape[0] for inst in predicted_proposals]), self.padded_input_size)
+            box_shape = predicted_proposals[0].gt_boxes.tensor.shape[1:]
+            dtype_ = predicted_proposals[0].gt_boxes.tensor.dtype
         else:
             M = max([inst.pred_boxes.tensor.shape[0] for inst in predicted_proposals])
+            box_shape = predicted_proposals[0].pred_boxes.tensor.shape[1:]
+            dtype_ = predicted_proposals[0].pred_boxes.tensor.dtype
         # infer shapes
-        box_shape = predicted_proposals[0].gt_boxes.tensor.shape[1:]
         gt_boxes_pad = torch.zeros(
             (B, M, *box_shape),
             device=self.device,
-            dtype=predicted_proposals[0].gt_boxes.tensor.dtype,
+            dtype=dtype_,
         )
         gt_mask_pad = torch.zeros(
             (B, M),
@@ -451,7 +454,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         pred_height_pad = torch.zeros(
             (B, M),
             device=self.device,
-            dtype=predicted_proposals[0].pred_height.dtype,
+            dtype=dtype_,
         )
         H_batch = torch.zeros(
             (B),
@@ -462,23 +465,16 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             if self.training:
                 boxes = inst.gt_boxes.tensor
                 n = min(len(boxes), M)
-                gt_mask_pad[i, :n] = inst.valid_mask[:n]
             else:
                 boxes = inst.pred_boxes.tensor
                 n = min(len(boxes), M)
-                gt_mask_pad[i, :n] = True
+            gt_mask_pad[i, :n] = True
             gt_boxes_pad[i, :n] = boxes[:n]
             pred_height_pad[i, :n] = inst.pred_height[:n]
             H_batch[i] = inst.image_size[0]
         return H_batch, gt_boxes_pad, gt_mask_pad, pred_height_pad
 
     def _camrcnn_predictions(self, predicted_proposals: List[Instances], camrcnn_data, grad_detach: bool = False):
-        if sum([inst.pred_height.numel() > 0 for inst in predicted_proposals]) == 0:
-            global _CAMRCNN_SKIPPED
-            _CAMRCNN_SKIPPED += 1
-            storage = get_event_storage()
-            storage.put_scalar("camrcnn_num_skipped_batches", _CAMRCNN_SKIPPED, smoothing_hint=False)
-            return {}, {}
         vfov_est, pitch_est, roll_est, horizon_est = camrcnn_data["vfov_est"], camrcnn_data[
             "pitch_est"], camrcnn_data["roll_est"], camrcnn_data["horizon_est"]
         H_batch, gt_boxes_pad, mask, pred_height_pad = self._pad_to_max_camrcnn(predicted_proposals)
@@ -644,25 +640,20 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             images.append(prop_img)
         return images
 
-    def visualize_training(self, batched_inputs, proposals, camrcnn_data: Optional[dict] = None):
+    def visualize_training(self, batched_inputs, proposals, target_proposals, camrcnn_data: Optional[dict] = None):
         """Basically the same as the GeneralizedRCNN method"""
         from detectron2.utils.visualizer import Visualizer
 
         storage = get_event_storage()
         max_vis_prop = 10
         metadata = MetadataCatalog.get("COCOScale2017Calib_train")
-        if not self.height_on:
-            return super().visualize_training(batched_inputs, proposals)
+        super().visualize_training(batched_inputs, proposals)
         if not camrcnn_data:
             return
         vfov_est, pitch_est = camrcnn_data["vfov_est"], camrcnn_data["pitch_est"]
         roll_est, horizon_est = camrcnn_data["roll_est"], camrcnn_data["horizon_est"]
-        for i, (input, prop) in enumerate(zip(batched_inputs, proposals)):
-            if (
-                (not prop.has("pred_boxes") or len(prop.pred_boxes) <= 1)
-            ):
-                continue
-            box_size = min(len(prop.pred_boxes), max_vis_prop)
+        for i, (input, prop) in enumerate(zip(batched_inputs, target_proposals)):
+            box_size = min(len(prop.gt_boxes), max_vis_prop)
             img = input["image"]
             img = convert_image_to_rgb(img.permute(1, 2, 0), self.input_format)
             v_gt = Visualizer(img, metadata=metadata)
@@ -684,7 +675,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 )
             v_pred = Visualizer(img, metadata=metadata)
             v_pred.overlay_instances(
-                boxes=prop.pred_boxes[0:box_size].tensor.cpu().numpy(),
+                boxes=prop.gt_boxes[0:box_size].tensor.cpu().numpy(),
                 keypoints=prop.pred_keypoints[0:box_size].detach().cpu(
                 ).numpy() if prop.has("pred_keypoints") else None,
                 labels=(list(map("{:.4f}".format, (prop.pred_height[0: box_size] * camrcnn_data["straighten_ratio"][i][0:box_size]).detach(
@@ -738,13 +729,13 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             proposals = [x["proposals"].to(self.device) for x in batched_inputs]
             proposal_losses = {}
 
-        proposals, detector_losses = self.roi_heads(images, features, proposals, gt_instances)
+        proposals, target_proposals, detector_losses = self.roi_heads(images, features, proposals, gt_instances)
         del images
 
         losses = {}
         losses.update(detector_losses)
         losses.update(proposal_losses)
-        return proposals, losses
+        return proposals, target_proposals, losses
 
     def _forward_camrcnn(self, batched_inputs: List[Dict[str, torch.Tensor]], features, proposals):
         gt_instances = [
@@ -866,7 +857,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         losses = {}
         images = self.preprocess_image(all_inputs)
         features = self.backbone(images.tensor)
-        proposals, dt_losses = self._forward_generalized_rcnn(
+        proposals, target_proposals, dt_losses = self._forward_generalized_rcnn(
             dt_inputs,
             ImageList(
                 tensor=images.tensor[: len(dt_inputs)],
@@ -889,7 +880,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, "horizon_est": horizon_est}
         if self.height_on:
             camrcnn_data, vt_loss = self._camrcnn_predictions(
-                proposals,
+                target_proposals,
                 camrcnn_data,
                 self.height_refine_on,
             )
@@ -903,13 +894,13 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 losses["vt_loss"] = (losses["vt_loss"] + sum(refine_loss["vt_losses"])) / \
                     (len(refine_loss["vt_losses"]) + 1)
                 # Either assign new values in Instances object or use camrcnn_data downstream
-                for m, h, prop in zip(camrcnn_data["mask"], camrcnn_data["pred_height"], proposals):
+                for m, h, prop in zip(camrcnn_data["mask"], camrcnn_data["pred_height"], target_proposals):
                     prop.pred_height = h[:m.sum()]
 
         if self.vis_period > 0:
             storage = get_event_storage()
             if storage.iter % self.vis_period == 0:
-                self.visualize_training(dt_inputs, proposals, camrcnn_data)
+                self.visualize_training(dt_inputs, proposals, target_proposals, camrcnn_data)
         return losses
 
     def inference(
@@ -951,9 +942,11 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             )
             if self.height_refine_on and camrcnn_data:
                 camrcnn_data, _ = self._camrcnn_refine(
-                    results,
                     camrcnn_data,
                 )
+            # Either assign new values in Instances object or use camrcnn_data downstream
+            for m, h, prop in zip(camrcnn_data["mask"], camrcnn_data["pred_height"], results):
+                prop.pred_height = h[:m.sum()]
         return results, camrcnn_data
 
     def visualize_training_camrcnn(self, batched_inputs, proposals):

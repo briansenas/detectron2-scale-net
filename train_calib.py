@@ -127,9 +127,19 @@ def build_args():
         help="Load state dict from CFG and previous experiment filtering keys.",
     )
     parser.add_argument(
+        "--resume-from-resume",
+        action="store_true",
+        help="Load state dict from CFG and previous experiment filtering keys.",
+    )
+    parser.add_argument(
         "--resume-from-filter-name",
         type=str,
         help="Filter state dict for weights containing this key.",
+    )
+    parser.add_argument(
+        "--freeze-backbone",
+        action="store_true",
+        help="To freeze the backbone of the model. Useful if we intented to initialize the camera classifier heads",
     )
     return parser.parse_args()
 
@@ -172,7 +182,9 @@ def main(args):
         )
     if args.resume_from:
         print(f"Resuming from previous experiment: {args.resume_from}")
+        trainer.resume_or_load(resume=args.resume_from_resume)
         model = trainer.model
+        model_state_dict = model.state_dict()
 
         def load_state_dict(exp_weights_path):
             checkpoint = torch.load(exp_weights_path, map_location="cpu")
@@ -181,7 +193,6 @@ def main(args):
             return state_dict
 
         calib_state_dict = load_state_dict(args.resume_from)
-        coco_state_dict = load_state_dict(cfg.MODEL.WEIGHTS)
         if args.resume_from_filter_name:
             # Filter only camera_head weights
             calib_state_dict = {
@@ -190,15 +201,17 @@ def main(args):
                 if args.resume_from_filter_name in k
             }
         # Merge both state dicts to have the full state dict to load. Make sure the argument is filtered.
-        coco_state_dict.update(calib_state_dict)
+        model_state_dict.update(calib_state_dict)
         # Load into trainer.model
-        missing, unexpected = model.load_state_dict(coco_state_dict, strict=False)
+        missing, unexpected = model.load_state_dict(model_state_dict, strict=False)
 
         print("Loaded camera_head weights into trainer.model")
         print("Missing keys:", missing)
         print("Unexpected keys:", unexpected)
     else:
         trainer.resume_or_load(resume=args.resume)
+    if args.freeze_backbone:
+        trainer.model.backbone.eval()
     trainer.train()
 
 
