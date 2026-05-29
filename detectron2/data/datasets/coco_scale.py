@@ -178,7 +178,7 @@ class KITTICocoDataset:
         anns = self.img_to_anns[img_id]
 
         instances = []
-        for ann in anns:
+        for ann in anns[:10]:
             instances.append({
                 "bbox": ann["bbox"],
                 "bbox_mode": BoxMode.XYWH_ABS,
