@@ -989,12 +989,12 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         texts = {}
         texts["pitch"] = gt_pitch
         texts["roll"] = gt_roll
-        texts["vfov"] = gt_pitch
+        texts["vfov"] = gt_vfov
         texts["horizon"] = gt_horizon
         v_gt = self._draw_labels(v_gt, texts)
         texts["pitch"] = pitch
         texts["roll"] = roll
-        texts["vfov"] = pitch
+        texts["vfov"] = vfov
         texts["horizon"] = horizon
         v_pred = self._draw_labels(v_pred, texts)
         anno_img = v_gt.get_output().get_image()
