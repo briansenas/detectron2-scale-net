@@ -1001,7 +1001,10 @@ def draw_labels(visualizer, texts):
     start_y = visualizer.img.shape[0] - padding_bottom - line_height * (n - 1)
     for i, (k, v) in enumerate(items):
         if isinstance(v, Iterable):
-            v = v[0]
+            if isinstance(v, np.ndarray) and v.ndim <= 0:
+                v = v.item()
+            else:
+                v = v[0]
         visualizer.draw_text(
             f"{k}: {v:.4f}",
             (x, start_y + i * line_height),
