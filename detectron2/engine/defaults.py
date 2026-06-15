@@ -931,7 +931,7 @@ class HybridScaleTrainer(HybridTrainer):
         elif "COCOScale" in dataset_name or "COCO2017" in dataset_name:
             return COCOScaleEvaluator(dataset_name=dataset_name, output_dir=cfg.OUTPUT_DIR)
         elif "Pano" in dataset_name:
-            return Pano360Evaluator()
+            return Pano360EvaluatorME()
         raise ValueError("Unknown dataset for this trainer")
 
     @classmethod

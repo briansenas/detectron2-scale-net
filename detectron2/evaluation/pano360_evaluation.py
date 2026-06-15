@@ -97,6 +97,8 @@ class Pano360EvaluatorME(DatasetEvaluator):
         self.num_samples = 0
 
     def process(self, inputs, outputs):
+        if isinstance(outputs, tuple):
+            preds, outputs = outputs
         pred_vfov_logits = outputs["vfov_logits"].cpu()
         pred_pitch_logits = outputs["pitch_logits"].cpu()
         pred_roll_logits = outputs["roll_logits"].cpu()
