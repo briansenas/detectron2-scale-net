@@ -1355,14 +1355,12 @@ class CombinedCameraHeads(ROIHeads):
     @configurable
     def __init__(
         self,
-        classifier_horizon: CameraHead,
         classifier_pitch: CameraHead,
         classifier_roll: CameraHead,
         classifier_vfov: CameraHead,
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.classifier_horizon = classifier_horizon
         self.classifier_pitch = classifier_pitch
         self.classifier_vfov = classifier_vfov
         self.classifier_roll = classifier_roll
@@ -1370,9 +1368,6 @@ class CombinedCameraHeads(ROIHeads):
     @classmethod
     def from_config(cls, cfg, input_shape):
         ret = super().from_config(cfg)
-        ret.update(
-            dict(classifier_horizon=CameraHead(cfg=cfg, input_shape=input_shape)),
-        )
         ret.update(
             dict(classifier_pitch=CameraHead(cfg=cfg, input_shape=input_shape)),
         )
@@ -1391,10 +1386,6 @@ class CombinedCameraHeads(ROIHeads):
         targets: Optional[List[Instances]] = None,
     ):
         losses = {}
-        horizon_logits = self.classifier_horizon(
-            features,
-            proposals,
-        )
         pitch_logits = self.classifier_pitch(
             features,
             proposals,
@@ -1408,7 +1399,6 @@ class CombinedCameraHeads(ROIHeads):
             proposals,
         )
         predictions = {
-            "horizon_logits": horizon_logits,
             "pitch_logits": pitch_logits,
             "roll_logits": roll_logits,
             "vfov_logits": vfov_logits,
@@ -1417,13 +1407,8 @@ class CombinedCameraHeads(ROIHeads):
         if self.training:
             assert targets, "'targets' argument is required during training"
             # If the x value has gt_horizon, it also has all the other gt unless dataset mapper is changed (which is not)
-            idxs = [i for i, x in enumerate(targets) if "gt_horizon" in x]
+            idxs = [i for i, x in enumerate(targets) if "gt_pitch" in x]
             assert len(idxs) > 0, "there are not gt camera parameters in targets"
-            horizon_loss = self.classifier_horizon.compute_loss(
-                horizon_logits[idxs],
-                # Targets don't allow idx slicing but is aligned by using the same list comprehension
-                [x["gt_horizon"] for x in targets if "gt_horizon" in x],
-            )
             pitch_loss = self.classifier_pitch.compute_loss(
                 pitch_logits[idxs],
                 [x["gt_pitch"] for x in targets if "gt_pitch" in x],
@@ -1437,7 +1422,6 @@ class CombinedCameraHeads(ROIHeads):
                 [x["gt_vfov"] for x in targets if "gt_vfov" in x],
             )
             losses = {
-                "horizon_loss": horizon_loss,
                 "pitch_loss": pitch_loss,
                 "roll_loss": roll_loss,
                 "vfov_loss": vfov_loss,

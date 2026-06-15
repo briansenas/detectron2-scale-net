@@ -907,12 +907,14 @@ class HybridScaleTrainer(HybridTrainer):
             iterable
         """
         dataset = get_detection_dataset_dicts(
-            "COCOScale2017_val", False, 2 if cfg.MODEL.KEYPOINT_ON else 0, None, check_consistency=True
+            dataset_name, False, 2 if cfg.MODEL.KEYPOINT_ON else 0, None, check_consistency=True
         )
+        mapper = COCOScaleMapper(
+            cfg, is_train=False) if "COCOScale" in dataset_name else CalibMapper(cfg, is_train=False)
         return build_detection_test_loader(
             dataset=dataset,
             num_workers=cfg.DATALOADER.NUM_WORKERS,
-            mapper=COCOScaleMapper(cfg, is_train=False),
+            mapper=mapper,
             sampler=InferenceSampler(len(dataset))
             if not isinstance(dataset, torchdata.IterableDataset)
             else None
@@ -920,7 +922,11 @@ class HybridScaleTrainer(HybridTrainer):
 
     @classmethod
     def build_evaluator(cls, cfg, dataset_name):
-        return COCOScaleEvaluator()
+        if "COCOScale" in dataset_name:
+            return COCOScaleEvaluator()
+        elif "Pano" in dataset_name:
+            return Pano360Evaluator()
+        raise ValueError("Unknown dataset for this trainer")
 
     @classmethod
     def build_train_loader(cls, cfg):
