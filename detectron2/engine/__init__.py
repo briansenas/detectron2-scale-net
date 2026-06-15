@@ -18,4 +18,5 @@ from .defaults import (
     CalibTrainer,
     COCOScaleTrainer,
     HybridScaleTrainer,
+    KittyCalibTrainer,
 )

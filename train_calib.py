@@ -4,12 +4,13 @@ from detectron2.config import get_cfg
 from detectron2.data import DatasetCatalog, MetadataCatalog
 from detectron2.data.build import get_detection_dataset_dicts
 from detectron2.data.datasets.builtin_meta import _get_builtin_metadata
-from detectron2.data.datasets.coco_scale import COCOScale2017, COCOScale2017Calib
+from detectron2.data.datasets.coco_scale import COCOScale2017, COCOScale2017Calib, KITTICocoDataset
 from detectron2.data.datasets.pano360 import CalibDataset
 from detectron2.engine import (
     CalibTrainer,
     COCOScaleTrainer,
     HybridScaleTrainer,
+    KittyCalibTrainer,
     default_argument_parser,
     default_setup,
     launch,
@@ -31,21 +32,32 @@ FILE_PATH = Path(__file__)
 PANO_TRAIN_NAME = "Pano360_train"
 PANO_VAL_NAME = "Pano360_val"
 COCO_SCALE_DATASET_NAME = "COCOScale2017_train"
+COCO_SCALE_VAL_DATASET_NAME = "COCOScale2017_val"
+COCO_DATASET_NAME = "COCO2017_train"
+COCO_VAL_DATASET_NAME = "COCO2017_val"
 COCO_SCALE_CALIB_DATASET_NAME = "COCOScale2017Calib_train"
 
+KITTY_TRAIN_NAME = "Kitty_train"
+KITTY_ROOT = os.path.join("data", "Kitty")
+KITTY_IMAGE_DIR = os.path.join(KITTY_ROOT, "data_object_image_2", "training", "image_2")
+KITTY_LABEL_DIR = os.path.join(KITTY_ROOT, "data_object_label_2", "training", "label_2")
+KITTY_OUTPUT_JSON = os.path.join("data", "Kitty", "kitti_coco.json")
 
-def register_datasets(keypoint_on: bool = False, debug: bool = True):
+
+def register_datasets(keypoint_on: bool = False, debug: bool = True, loss_criterion: str = "kl"):
     calib_train = CalibDataset(
         train=True,
         json_name="datasets/pano360_crops_dataset_cvpr_myDistWider_train.json",
         logger=None,
         debug=debug,
+        loss_criterion=loss_criterion,
     )
     calib_val = CalibDataset(
         train=False,
         json_name="datasets/pano360_crops_dataset_cvpr_myDistWider_train.json",
         logger=None,
         debug=debug,
+        loss_criterion=loss_criterion,
     )
     DatasetCatalog.register(PANO_TRAIN_NAME, calib_train)
     DatasetCatalog.register(PANO_VAL_NAME, calib_val)
@@ -55,8 +67,10 @@ def register_datasets(keypoint_on: bool = False, debug: bool = True):
     coco_path = base_path / "data" / "coco"
     coco_annotations_path = coco_path / "annotations"
     coco_keypoints_path = coco_annotations_path / "person_keypoints_train2017.json"
+    coco_keypoints_val_path = coco_annotations_path / "person_keypoints_val2017.json"
     coco_scalenet_results_path = coco_path / "coco_results"
     coco_images_root_path = coco_path / "train2017"
+    coco_val_images_root_path = coco_path / "val2017"
 
     coco_scale_train = COCOScale2017(
         debug=debug,
@@ -68,7 +82,6 @@ def register_datasets(keypoint_on: bool = False, debug: bool = True):
         "results_with_kps_20200208_morethan2_2-8" /
         "pickle",
     )
-
     coco_meta = _get_builtin_metadata("coco_person")
     DatasetCatalog.register(COCO_SCALE_DATASET_NAME, coco_scale_train)
     MetadataCatalog.get(COCO_SCALE_DATASET_NAME).set(
@@ -77,6 +90,28 @@ def register_datasets(keypoint_on: bool = False, debug: bool = True):
         evaluator_type="coco",
         **coco_meta,
     )
+    coco_scale_val = COCOScale2017(
+        debug=debug,
+        split="val",
+        camera_parameters_file_path=coco_scalenet_results_path / "yannick_results_train2017_filtered",
+        coco_json_file_path=coco_keypoints_val_path,
+        coco_image_root_path=coco_val_images_root_path,
+        coco_scale_pickle_path=coco_scalenet_results_path /
+        "results_with_kps_20200225_val2017_test_detOnly_filtered_2-8_moreThan2" / "pickle",
+    )
+    coco_meta = _get_builtin_metadata("coco_person")
+    DatasetCatalog.register(COCO_SCALE_VAL_DATASET_NAME, coco_scale_val)
+    MetadataCatalog.get(COCO_SCALE_VAL_DATASET_NAME).set(
+        json_file=coco_keypoints_val_path, image_root=coco_val_images_root_path, evaluator_type="coco", **coco_meta,
+        thing_dataset_id_to_contiguous_id={1: 0}  # COCO ID 1 → internal ID 0
+    )
+    coco_meta = _get_builtin_metadata("coco_person")
+    DatasetCatalog.register(COCO_VAL_DATASET_NAME, coco_scale_val)
+    MetadataCatalog.get(COCO_VAL_DATASET_NAME).set(
+        json_file=coco_keypoints_val_path, image_root=coco_val_images_root_path, evaluator_type="coco", **coco_meta,
+        thing_dataset_id_to_contiguous_id={1: 0}  # COCO ID 1 → internal ID 0
+    )
+
     # This is need due to internal consistency checks of d2 for keypoints_on
     MetadataCatalog.get(PANO_TRAIN_NAME).set(
         json_file=coco_keypoints_path,
@@ -89,7 +124,8 @@ def register_datasets(keypoint_on: bool = False, debug: bool = True):
     coco_scale_calib_dataset = COCOScale2017Calib(
         calib_train,
         get_detection_dataset_dicts(
-            COCO_SCALE_DATASET_NAME, True, 2 if keypoint_on else 0, None, check_consistency=True),
+            COCO_SCALE_DATASET_NAME, True, 2 if keypoint_on else 0, None, check_consistency=True
+        ),
     )
     DatasetCatalog.register(COCO_SCALE_CALIB_DATASET_NAME, coco_scale_calib_dataset)
     MetadataCatalog.get(COCO_SCALE_CALIB_DATASET_NAME).set(
@@ -98,6 +134,18 @@ def register_datasets(keypoint_on: bool = False, debug: bool = True):
         evaluator_type="coco",
         **coco_meta,
         thing_dataset_id_to_contiguous_id={1: 0},  # COCO ID 1 → internal ID 0
+    )
+    kitty_dataset_name = "Kitty_train"
+    DatasetCatalog.register(
+        kitty_dataset_name,
+        KITTICocoDataset(
+            KITTY_OUTPUT_JSON,
+            KITTY_IMAGE_DIR,
+        )
+    )
+    coco_meta = _get_builtin_metadata("coco")
+    MetadataCatalog.get(kitty_dataset_name).set(
+        thing_dataset_id_to_contiguous_id={1: 0, 3: 1}  # COCO ID 1 → internal ID 0
     )
 
 
@@ -127,14 +175,13 @@ def build_args():
         help="Load state dict from CFG and previous experiment filtering keys.",
     )
     parser.add_argument(
-        "--resume-from-resume",
-        action="store_true",
-        help="Load state dict from CFG and previous experiment filtering keys.",
-    )
-    parser.add_argument(
         "--resume-from-filter-name",
         type=str,
         help="Filter state dict for weights containing this key.",
+    )
+    parser.add_argument(
+        "--resume-from-resume",
+        action="store_true",
     )
     parser.add_argument(
         "--freeze-backbone",
@@ -159,7 +206,7 @@ def invoke_main():
 
 def main(args):
     cfg = setup(args)
-    register_datasets(cfg.MODEL.KEYPOINT_ON, args.debug)
+    register_datasets(cfg.MODEL.KEYPOINT_ON, args.debug, cfg.MODEL.CAMERA_HEAD.LOSS_CRITERION)
     if len(cfg.DATASETS.TRAIN) > 1:
         raise ValueError("This is script is not intended for multiple datasets")
     if cfg.DATASETS.TRAIN[0] == PANO_TRAIN_NAME:
@@ -168,6 +215,8 @@ def main(args):
         trainer = COCOScaleTrainer(cfg)
     elif cfg.DATASETS.TRAIN[0] == COCO_SCALE_CALIB_DATASET_NAME:
         trainer = HybridScaleTrainer(cfg)
+    elif cfg.DATASETS.TRAIN[0] == KITTY_TRAIN_NAME:
+        trainer = KittyCalibTrainer(cfg)
     else:
         raise ValueError(
             "This file is not made for datasets outside %s and cfg is %s"
@@ -176,6 +225,7 @@ def main(args):
                     PANO_TRAIN_NAME,
                     COCO_SCALE_CALIB_DATASET_NAME,
                     COCO_SCALE_CALIB_DATASET_NAME,
+                    KITTY_TRAIN_NAME,
                 },
                 cfg.DATASETS.TRAIN,
             )

@@ -355,7 +355,6 @@ class COCOScaleMapper(DatasetMapper):
                 transforms,
                 proposal_topk=self.proposal_topk,
             )
-
         if not self.is_train:
             # USER: Modify this if you want to keep them for some reason.
             dataset_dict.pop("annotations", None)
@@ -449,3 +448,10 @@ class HybridDataMapper(DatasetMapper):
         for sample in dataset_dict["calib_data"]:
             calib_data.append(self.calib_mapper(sample))
         return {"scale_data": coco_data, "calib_data": calib_data}
+
+
+class KittyMapper(DatasetMapper):
+    def __call__(self, dataset_dict):
+        result_dict = super().__call__(dataset_dict)
+        result_dict["instances"].object_height = torch.as_tensor([x["object_height"] for x in dataset_dict["annotations"]])
+        return result_dict

@@ -20,7 +20,7 @@ from detectron2.data import (
     CalibMapper,
     COCOScaleMapper,
     DatasetMapper,
-    HybridDataMapper,
+    KittyMapper,
     MapDataset,
     MetadataCatalog,
     build_detection_test_loader,
@@ -32,11 +32,14 @@ from detectron2.data.common import (
     RatioSampler,
     ToIterableDataset,
 )
-from detectron2.data.samplers import TrainingSampler
+from detectron2.data.samplers import InferenceSampler, TrainingSampler
 from detectron2.evaluation import (
     COCOEvaluator,
+    COCOScaleEvaluator,
+    COCOScaleEvaluatorVT,
     DatasetEvaluator,
-    Pano360Evaluator,
+    KittyEvaluator,
+    Pano360EvaluatorME,
     inference_on_dataset,
     print_csv_format,
     verify_results,
@@ -843,7 +846,7 @@ class CalibTrainer(DefaultTrainer):
         Returns:
             DatasetEvaluator
         """
-        return Pano360Evaluator()
+        return Pano360EvaluatorME(cfg.MODEL.CAMERA_HEAD.LOSS_CRITERION)
 
     @classmethod
     def build_train_loader(cls, cfg):
@@ -906,7 +909,29 @@ class HybridScaleTrainer(HybridTrainer):
         Returns:
             iterable
         """
-        return build_detection_test_loader(cfg, dataset_name, collate_fn=lambda x: x[0])
+        dataset = get_detection_dataset_dicts(
+            dataset_name, False, 0, None, check_consistency=True
+        )
+        mapper = COCOScaleMapper(
+            cfg, is_train=False) if "COCOScale" in dataset_name else CalibMapper(cfg, is_train=False)
+        return build_detection_test_loader(
+            dataset=dataset,
+            num_workers=cfg.DATALOADER.NUM_WORKERS,
+            mapper=mapper,
+            sampler=InferenceSampler(len(dataset))
+            if not isinstance(dataset, torchdata.IterableDataset)
+            else None
+        )
+
+    @classmethod
+    def build_evaluator(cls, cfg, dataset_name):
+        if "COCOScale" in dataset_name and cfg.MODEL.HEIGHT_ON:
+            return COCOScaleEvaluatorVT()
+        elif "COCOScale" in dataset_name or "COCO2017" in dataset_name:
+            return COCOScaleEvaluator(dataset_name=dataset_name, output_dir=cfg.OUTPUT_DIR)
+        elif "Pano" in dataset_name:
+            return Pano360EvaluatorME()
+        raise ValueError("Unknown dataset for this trainer")
 
     @classmethod
     def build_train_loader(cls, cfg):
@@ -919,7 +944,7 @@ class HybridScaleTrainer(HybridTrainer):
         datasets = [
             MapDataset(
                 get_detection_dataset_dicts(
-                    "COCOScale2017_train", True, 2, None, check_consistency=True
+                    "COCOScale2017_train", True, 2 if cfg.MODEL.KEYPOINT_ON else 0, None, check_consistency=True
                 ),
                 COCOScaleMapper(cfg, is_train=True),
             ),
@@ -970,6 +995,27 @@ class HybridScaleTrainer(HybridTrainer):
 
 class KittyCalibTrainer(HybridTrainer):
     @classmethod
+    def build_test_loader(cls, cfg, dataset_name):
+        dataset = get_detection_dataset_dicts(
+            dataset_name, True, 0, None, check_consistency=True
+        )
+        mapper = KittyMapper(cfg, is_train=True)
+        return build_detection_test_loader(
+            dataset=dataset,
+            num_workers=cfg.DATALOADER.NUM_WORKERS,
+            mapper=mapper,
+            sampler=InferenceSampler(len(dataset))
+            if not isinstance(dataset, torchdata.IterableDataset)
+            else None
+        )
+
+    @classmethod
+    def build_evaluator(cls, cfg, dataset_name):
+        if "Kitty" in dataset_name:
+            return KittyEvaluator()
+        raise ValueError("Evaluator not implemented in trainer")
+
+    @classmethod
     def build_train_loader(cls, cfg):
         """
         Returns:
@@ -980,7 +1026,7 @@ class KittyCalibTrainer(HybridTrainer):
         datasets = [
             MapDataset(
                 get_detection_dataset_dicts(
-                    "Kitty_train", False, 0, None, check_consistency=True
+                    "Kitty_train", True, 0, None, check_consistency=True
                 ),
                 DatasetMapper(cfg, is_train=True),
             ),
