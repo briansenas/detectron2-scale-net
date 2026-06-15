@@ -1,42 +1,34 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-import itertools
-import logging
-import operator
-import pickle
-from collections import defaultdict
-from collections import OrderedDict
-from typing import Any
-from typing import Callable
-from typing import Dict
-from typing import List
-from typing import Optional
-from typing import Union
-
 import numpy as np
 import torch
 import torch.utils.data as torchdata
 from tabulate import tabulate
 from termcolor import colored
 
-from .catalog import DatasetCatalog
-from .catalog import MetadataCatalog
-from .common import AspectRatioGroupedDataset
-from .common import DatasetFromList
-from .common import MapDataset
-from .common import ToIterableDataset
-from .dataset_mapper import DatasetMapper
-from .detection_utils import check_metadata_consistency
-from .samplers import InferenceSampler
-from .samplers import RandomSubsetTrainingSampler
-from .samplers import RepeatFactorTrainingSampler
-from .samplers import TrainingSampler
 from detectron2.config import configurable
 from detectron2.structures import BoxMode
 from detectron2.utils.comm import get_world_size
 from detectron2.utils.env import seed_all_rng
 from detectron2.utils.file_io import PathManager
-from detectron2.utils.logger import _log_api_usage
-from detectron2.utils.logger import log_first_n
+from detectron2.utils.logger import _log_api_usage, log_first_n
+
+import itertools
+import logging
+import operator
+import pickle
+from collections import OrderedDict, defaultdict
+from typing import Any, Callable, Dict, List, Optional, Union
+
+from .catalog import DatasetCatalog, MetadataCatalog
+from .common import AspectRatioGroupedDataset, DatasetFromList, MapDataset, ToIterableDataset
+from .dataset_mapper import DatasetMapper
+from .detection_utils import check_metadata_consistency
+from .samplers import (
+    InferenceSampler,
+    RandomSubsetTrainingSampler,
+    RepeatFactorTrainingSampler,
+    TrainingSampler,
+)
 
 """
 This file contains the default logic to build a dataloader for training or testing.
@@ -230,8 +222,8 @@ def print_instances_class_histogram(dataset_dicts, class_names):
     )
     log_first_n(
         logging.INFO,
-        "Distribution of instances among all {} categories:\n".format(num_classes)
-        + colored(table, "cyan"),
+        "Distribution of instances among all {} categories:\n".format(num_classes) +
+        colored(table, "cyan"),
         key="message",
     )
 
@@ -291,9 +283,7 @@ def get_detection_dataset_dicts(
             load_proposals_into_dataset(dataset_i_dicts, proposal_file)
             for dataset_i_dicts, proposal_file in zip(dataset_dicts, proposal_files)
         ]
-
     dataset_dicts = list(itertools.chain.from_iterable(dataset_dicts))
-
     has_instances = "annotations" in dataset_dicts[0]
     if filter_empty and has_instances:
         dataset_dicts = filter_images_with_only_crowd_annotations(dataset_dicts)

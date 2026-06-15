@@ -31,9 +31,10 @@ from detectron2.data.common import (
     RatioSampler,
     ToIterableDataset,
 )
-from detectron2.data.samplers import TrainingSampler
+from detectron2.data.samplers import InferenceSampler, TrainingSampler
 from detectron2.evaluation import (
     COCOEvaluator,
+    COCOScaleEvaluator,
     DatasetEvaluator,
     Pano360Evaluator,
     inference_on_dataset,
@@ -905,7 +906,21 @@ class HybridScaleTrainer(HybridTrainer):
         Returns:
             iterable
         """
-        return build_detection_test_loader(cfg, dataset_name, collate_fn=lambda x: x[0])
+        dataset = get_detection_dataset_dicts(
+            "COCOScale2017_val", False, 2 if cfg.MODEL.KEYPOINT_ON else 0, None, check_consistency=True
+        )
+        return build_detection_test_loader(
+            dataset=dataset,
+            num_workers=cfg.DATALOADER.NUM_WORKERS,
+            mapper=COCOScaleMapper(cfg, is_train=False),
+            sampler=InferenceSampler(len(dataset))
+            if not isinstance(dataset, torchdata.IterableDataset)
+            else None
+        )
+
+    @classmethod
+    def build_evaluator(cls, cfg, dataset_name):
+        return COCOScaleEvaluator()
 
     @classmethod
     def build_train_loader(cls, cfg):

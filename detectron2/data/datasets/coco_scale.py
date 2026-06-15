@@ -32,7 +32,7 @@ class COCOScale2017:
             self.logger = logger
 
         self.coco_data = load_coco_json(coco_json_file_path, coco_image_root_path)
-        self.is_train = split in ["train", "val"]
+        self.is_train = split == "train"
 
         # Estimated GT from coco files using a calibrated model?
         self.camera_parameters_files = sorted(Path(camera_parameters_file_path).glob("*.mat"), key=lambda x: str(x))
@@ -58,7 +58,7 @@ class COCOScale2017:
             self.camera_parameters_files = []
             self.pickle_files = sorted(Path(coco_scale_pickle_path).glob("*.data"), key=lambda x: str(x))
             self.img_files = [
-                coco_image_root_path / (str(pickle_file.stem()) + ".jpg")
+                coco_image_root_path / (pickle_file.stem + ".jpg")
                 for pickle_file in self.pickle_files
             ]
         if debug:
@@ -76,8 +76,7 @@ class COCOScale2017:
             data = pickle.load(fhdl)
         im_path = self.img_files[k]
         bboxes = data["bboxes"].astype(np.float32)
-        kps_gt = data["kps"].astype(int).tolist()
-        pitch = vfov = roll = -1
+        horizon = pitch = vfov = roll = -1
         if self.is_train:
             camera_parameters = loadmat(self.camera_parameters_files[k])
             pitch = camera_parameters["pitch"][0][0].astype(np.float32)
@@ -85,13 +84,22 @@ class COCOScale2017:
             roll = camera_parameters["roll"][0][0].astype(np.float32)
             horizon = camera_parameters["horizon"][0][0].astype(np.float32)
         instances = []
-        for bbox, kps in zip(bboxes[:10], kps_gt):
-            instances.append(dict(
-                bbox=bbox.tolist(),
-                bbox_mode=BoxMode.XYWH_ABS,
-                category_id=0,
-                keypoints=kps,
-            ))
+        if "kps" in data:
+            kps_gt = data["kps"].astype(int).tolist()
+            for bbox, kps in zip(bboxes[:10], kps_gt):
+                instances.append(dict(
+                    bbox=bbox.tolist(),
+                    bbox_mode=BoxMode.XYWH_ABS,
+                    category_id=0,
+                    keypoints=kps,
+                ))
+        else:
+            for bbox in bboxes[:10]:
+                instances.append(dict(
+                    bbox=bbox.tolist(),
+                    bbox_mode=BoxMode.XYWH_ABS,
+                    category_id=0,
+                ))
         return dict(
             source="coco",
             file_name=im_path,

@@ -355,7 +355,6 @@ class COCOScaleMapper(DatasetMapper):
                 transforms,
                 proposal_topk=self.proposal_topk,
             )
-
         if not self.is_train:
             # USER: Modify this if you want to keep them for some reason.
             dataset_dict.pop("annotations", None)

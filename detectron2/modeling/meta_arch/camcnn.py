@@ -459,6 +459,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         vt_loss = (loss.sum(dim=1) / (mask.sum(dim=1) + eps)).mean()
         # Store the projection loss for refine heads.
         camrcnn_data["vt_camEst_N"] = vt_camEst_N
+        camrcnn_data["vt_loss"] = vt_loss
         return vt_loss
 
     def _pad_to_max_camrcnn(self, predicted_proposals):
@@ -877,7 +878,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         dt_logits = {k: v[:len(dt_inputs)] for k, v in cls_logits.items()}
         vfov_est, pitch_est, roll_est, horizon_est = self._get_camera_values(dt_logits)
         camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, "horizon_est": horizon_est}
-        if not self.point_net_on:
+        if not self.point_net_on and self.height_on:
             camera_height_key = "camera_height"
             camrcnn_data["yc_est"] = torch.as_tensor(
                 [x[camera_height_key] for x in dt_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)
@@ -935,7 +936,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         cam_logits, _ = self.camera_heads(features, _add_whole_image_as_proposal(images, self.device), None)
         vfov_est, pitch_est, roll_est, horizon_est = self._get_camera_values(cam_logits)
         camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, "horizon_est": horizon_est}
-        if not self.point_net_on:
+        if not self.point_net_on and self.height_on:
             camera_height_key = "camera_height"
             camrcnn_data["yc_est"] = torch.as_tensor(
                 [x[camera_height_key] for x in batched_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)

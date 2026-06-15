@@ -32,6 +32,7 @@ FILE_PATH = Path(__file__)
 PANO_TRAIN_NAME = "Pano360_train"
 PANO_VAL_NAME = "Pano360_val"
 COCO_SCALE_DATASET_NAME = "COCOScale2017_train"
+COCO_SCALE_VAL_DATASET_NAME = "COCOScale2017_val"
 COCO_SCALE_CALIB_DATASET_NAME = "COCOScale2017Calib_train"
 
 KITTY_TRAIN_NAME = "Kitty_train"
@@ -62,8 +63,10 @@ def register_datasets(keypoint_on: bool = False, debug: bool = True):
     coco_path = base_path / "data" / "coco"
     coco_annotations_path = coco_path / "annotations"
     coco_keypoints_path = coco_annotations_path / "person_keypoints_train2017.json"
+    coco_keypoints_val_path = coco_annotations_path / "person_keypoints_val2017.json"
     coco_scalenet_results_path = coco_path / "coco_results"
     coco_images_root_path = coco_path / "train2017"
+    coco_val_images_root_path = coco_path / "val2017"
 
     coco_scale_train = COCOScale2017(
         debug=debug,
@@ -75,7 +78,6 @@ def register_datasets(keypoint_on: bool = False, debug: bool = True):
         "results_with_kps_20200208_morethan2_2-8" /
         "pickle",
     )
-
     coco_meta = _get_builtin_metadata("coco_person")
     DatasetCatalog.register(COCO_SCALE_DATASET_NAME, coco_scale_train)
     MetadataCatalog.get(COCO_SCALE_DATASET_NAME).set(
@@ -84,6 +86,25 @@ def register_datasets(keypoint_on: bool = False, debug: bool = True):
         evaluator_type="coco",
         **coco_meta,
     )
+    coco_scale_val = COCOScale2017(
+        debug=debug,
+        split="val",
+        camera_parameters_file_path=coco_scalenet_results_path / "yannick_results_train2017_filtered",
+        coco_json_file_path=coco_keypoints_val_path,
+        coco_image_root_path=coco_val_images_root_path,
+        coco_scale_pickle_path=coco_scalenet_results_path /
+        "results_with_kps_20200225_val2017_test_detOnly_filtered_2-8_moreThan2" / "pickle",
+    )
+    coco_meta = _get_builtin_metadata("coco_person")
+    coco_scale_val_dataset_name = "COCOScale2017_val"
+    if coco_scale_val_dataset_name in DatasetCatalog:
+        DatasetCatalog.remove(coco_scale_val_dataset_name)
+    DatasetCatalog.register(coco_scale_val_dataset_name, coco_scale_val)
+    MetadataCatalog.get(COCO_SCALE_VAL_DATASET_NAME).set(
+        json_file=coco_keypoints_val_path, image_root=coco_val_images_root_path, evaluator_type="coco", **coco_meta,
+        thing_dataset_id_to_contiguous_id={1: 0}  # COCO ID 1 → internal ID 0
+    )
+
     # This is need due to internal consistency checks of d2 for keypoints_on
     MetadataCatalog.get(PANO_TRAIN_NAME).set(
         json_file=coco_keypoints_path,
