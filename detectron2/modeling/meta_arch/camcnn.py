@@ -890,10 +890,14 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         batched_inputs: List[Dict[str, torch.Tensor]],
         detected_instances: Optional[List[Instances]] = None,
         do_postprocess: bool = True,
+        camera_data: bool = False,
     ):
         assert not self.training
         images = self.preprocess_image(batched_inputs)
         features = self.backbone(images.tensor)
+        if all([x["source"] == "pano360" for x in batched_inputs]):
+            cam_logits, _ = self.camera_heads(features, _add_whole_image_as_proposal(images, self.device), None)
+            return [], cam_logits
 
         if detected_instances is None:
             if self.proposal_generator is not None:
@@ -914,15 +918,16 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         # NOTE: Should only skip the problematic
         empty_set = [x for x in results if len(x) <= 0]
         non_empty_set = [x for x in results if len(x) >= 1]
-        cam_logits, _ = self.camera_heads(features, _add_whole_image_as_proposal(images, self.device), None)
-        vfov_est, pitch_est, roll_est = self._get_camera_values(cam_logits)
-        camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, **cam_logits}
-        if non_empty_set:
-            if not self.point_net_on and self.height_on:
-                camera_height_key = "camera_height"
-                camrcnn_data["yc_est"] = torch.as_tensor(
-                    [x[camera_height_key] for x in batched_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)
-            if self.height_on:
+        camrcnn_data = {}
+        if self.height_on or camera_data:
+            cam_logits, _ = self.camera_heads(features, _add_whole_image_as_proposal(images, self.device), None)
+            vfov_est, pitch_est, roll_est = self._get_camera_values(cam_logits)
+            camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, **cam_logits}
+            if non_empty_set and self.height_on:
+                if not self.point_net_on:
+                    camera_height_key = "camera_height"
+                    camrcnn_data["yc_est"] = torch.as_tensor(
+                        [x[camera_height_key] for x in batched_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)
                 camrcnn_data, _ = self._camrcnn_predictions(
                     non_empty_set,
                     camrcnn_data,
