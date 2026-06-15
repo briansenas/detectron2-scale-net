@@ -16,6 +16,7 @@ from .dataset_mapper import CalibMapper
 from .dataset_mapper import COCOScaleMapper
 from .dataset_mapper import HybridDataMapper
 from .dataset_mapper import DatasetMapper
+from .dataset_mapper import KittyMapper
 
 # ensure the builtin datasets are registered
 from . import datasets  # noreorder

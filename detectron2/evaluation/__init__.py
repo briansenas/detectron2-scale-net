@@ -9,6 +9,9 @@ from .evaluator import inference_on_dataset
 from .lvis_evaluation import LVISEvaluator
 from .pano360_evaluation import Pano360Evaluator
 from .cocoscale_evaluation import COCOScaleEvaluator
+from .cocoscale_evaluation import COCOScaleEvaluatorVT
+from .kitty_evaluation import KittyEvaluator
+from .pano360_evaluation import Pano360EvaluatorME
 from .panoptic_evaluation import COCOPanopticEvaluator
 from .pascal_voc_evaluation import PascalVOCDetectionEvaluator
 from .rotated_coco_evaluation import RotatedCOCOEvaluator

@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from detectron2.config import configurable
-from detectron2.data.datasets.pano360 import COCO_SCALE_STATS
+from detectron2.data.datasets.pano360 import COCO_SCALE_STATS, softargmax1d
 from detectron2.data.detection_utils import person_h_list_loss, prob_to_est
 from detectron2.layers import ShapeSpec, nonzero_tuple
 from detectron2.structures import Boxes, ImageList, Instances, Keypoints, pairwise_iou
@@ -1257,6 +1257,8 @@ class CameraHead(ROIHeads):
         box_pooler: ROIPooler,
         predictor: FastRCNNConvFCHead,
         cls_score: nn.Linear,
+        loss_criterion: str = "softargmax_l2",
+        loss_weight: float = 1.,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -1264,6 +1266,8 @@ class CameraHead(ROIHeads):
         self.box_pooler = box_pooler
         self.predictor = predictor
         self.cls_score = cls_score
+        self.loss_criterion = loss_criterion
+        self.loss_weight = loss_weight
 
     @classmethod
     def from_config(cls, cfg, input_shape):
@@ -1334,7 +1338,7 @@ class CameraHead(ROIHeads):
         del x
         return class_logits
 
-    def compute_loss(self, logits, targets):
+    def compute_loss_klce(self, logits, targets):
         assert targets, "'targets' argument is required during training"
         targets = torch.as_tensor(targets).to(device=logits.device, dtype=torch.long)
         targets = torch.nn.functional.one_hot(targets, num_classes=logits.shape[1]).to(logits.dtype)
@@ -1343,6 +1347,29 @@ class CameraHead(ROIHeads):
             targets,
             reduction="batchmean",
         )
+
+    def compute_loss(self, logits, targets):
+        if self.loss_criterion in ('kl', 'ce'):
+            return self.loss_weight * self.compute_loss_klce(logits, targets)
+        elif self.loss_criterion in ('softargmax_l2_biased', 'softargmax_l2'):
+            return self.loss_weight * self.compute_loss_l2(logits, targets, self.loss_criterion)
+        else:
+            raise ValueError(f'{self.loss_criterion} is not defined!')
+
+    def compute_loss_l2(self, logits, targets, criterion: str = "softargmax_l2"):
+        assert targets, "'targets' argument is required during training"
+        targets = torch.as_tensor(targets).to(device=logits.device)
+        logits = logits.unsqueeze(1)  # (N, 1, 256)
+        logits_argmax, _ = softargmax1d(logits, normalize_keypoints=True)  # (N, 1, 1)
+        logits_argmax = logits_argmax.reshape(-1)
+        if criterion == 'softargmax_l2':
+            loss = (targets - logits_argmax) ** 2
+        elif criterion == 'softargmax_l2_biased':
+            l2 = (targets - logits_argmax) ** 2
+            loss = torch.where(torch.gt(logits_argmax, targets), l2, l2 / (l2 + 1))
+        else:
+            raise ValueError(f'{criterion} is not defined!')
+        return loss.mean()
 
 
 @ROI_HEADS_REGISTRY.register()
@@ -1358,24 +1385,65 @@ class CombinedCameraHeads(ROIHeads):
         classifier_pitch: CameraHead,
         classifier_roll: CameraHead,
         classifier_vfov: CameraHead,
+        loss_criterion: str = "kl",
+        pitch_weight: float = 1.0,
+        roll_weight: float = 1.0,
+        vfov_weight: float = 1.0,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.classifier_pitch = classifier_pitch
         self.classifier_vfov = classifier_vfov
         self.classifier_roll = classifier_roll
+        self.loss_criterion = loss_criterion
+        self.pitch_weight = pitch_weight
+        self.roll_weight = roll_weight
+        self.vfov_weight = vfov_weight
 
     @classmethod
     def from_config(cls, cfg, input_shape):
         ret = super().from_config(cfg)
+        ret["loss_criterion"] = cfg.MODEL.CAMERA_HEAD.LOSS_CRITERION
+        ret["pitch_weight"] = cfg.MODEL.CAMERA_HEAD.PITCH_WEIGHT
+        ret["roll_weight"] = cfg.MODEL.CAMERA_HEAD.ROLL_WEIGHT
+        ret["vfov_weight"] = cfg.MODEL.CAMERA_HEAD.VFOV_WEIGHT
         ret.update(
-            dict(classifier_pitch=CameraHead(cfg=cfg, input_shape=input_shape)),
+            dict(
+                classifier_pitch=CameraHead(
+                    cfg=cfg,
+                    input_shape=input_shape,
+                    loss_weight=ret["pitch_weight"],
+                    loss_criterion=(
+                        "softargmax_l2"
+                        if "softargmax_l2" in ret["loss_criterion"]
+                        else ret["loss_criterion"]
+                    ),
+                )
+            ),
         )
         ret.update(
-            dict(classifier_vfov=CameraHead(cfg=cfg, input_shape=input_shape)),
+            dict(
+                classifier_vfov=CameraHead(
+                    cfg=cfg,
+                    input_shape=input_shape,
+                    loss_weight=ret["vfov_weight"],
+                    loss_criterion=ret["loss_criterion"],
+                )
+            ),
         )
         ret.update(
-            dict(classifier_roll=CameraHead(cfg=cfg, input_shape=input_shape)),
+            dict(
+                classifier_roll=CameraHead(
+                    cfg=cfg,
+                    input_shape=input_shape,
+                    loss_weight=ret["roll_weight"],
+                    loss_criterion=(
+                        "softargmax_l2"
+                        if "softargmax_l2" in ret["loss_criterion"]
+                        else ret["loss_criterion"]
+                    ),
+                )
+            ),
         )
         return ret
 

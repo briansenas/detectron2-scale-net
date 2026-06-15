@@ -162,6 +162,9 @@ class KITTICocoDataset:
         self,
         coco_json_file_path,
         coco_image_root_path,
+        *,
+        debug: bool = False,
+        debug_size: int = 1000,
     ):
         with open(coco_json_file_path, "r") as f:
             coco = json.load(f)
@@ -179,6 +182,9 @@ class KITTICocoDataset:
             if img["id"] in self.img_to_anns
         ]
 
+        if debug:
+            self.images = self.images[:debug_size]
+
     def __getitem__(self, idx):
         img = self.images[idx]
         img_id = img["id"]
@@ -190,6 +196,9 @@ class KITTICocoDataset:
             instances.append({
                 "bbox": ann["bbox"],
                 "bbox_mode": BoxMode.XYWH_ABS,
+                "object_height": ann["object_height"],   # meters
+                "object_width": ann["object_width"],     # meters
+                "object_length": ann["object_length"],   # meters
                 "category_id": ann["category_id"] - 1,  # 0-based
             })
 

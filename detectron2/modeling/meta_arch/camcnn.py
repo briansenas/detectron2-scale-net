@@ -6,12 +6,17 @@ from torch import nn
 from detectron2.config import configurable
 from detectron2.data.datasets.pano360 import (
     COCO_SCALE_STATS,
-    bins2pitch,
-    bins2roll,
-    bins2vfov,
+    convert_preds_to_angles,
+    get_softargmax,
+    pitch2soft_idx,
+    pitch_bins,
     pitch_bins_centers,
+    roll2soft_idx,
     roll_bins_centers,
     showHorizonLine,
+    soft_idx_to_angle,
+    vfov2soft_idx,
+    vfov_bins,
     vfov_bins_centers,
     yc_bins_layers_list,
 )
@@ -26,7 +31,7 @@ from detectron2.layers import move_device_like
 from detectron2.structures import ImageList, Instances
 from detectron2.utils.events import get_event_storage
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from ..backbone import Backbone, build_backbone
 from ..proposal_generator import build_proposal_generator
@@ -71,6 +76,7 @@ class CameraRCNN(nn.Module):
         self.backbone = backbone
         self.proposal_generator = proposal_generator
         self.camera_heads = camera_heads
+        self.loss_criterion = self.camera_heads.loss_criterion
 
         self.input_format = input_format
         self.vis_period = vis_period
@@ -148,14 +154,7 @@ class CameraRCNN(nn.Module):
 
         # Inyect GT manually to avoid other detectron2 previous logic
         if "logits" in batched_inputs[0]:
-            gt_instances = [
-                dict(
-                    gt_pitch=x["logits"]["gt_pitch"],
-                    gt_roll=x["logits"]["gt_roll"],
-                    gt_vfov=x["logits"]["gt_vfov"],
-                )
-                for x in batched_inputs
-            ]
+            gt_instances = prepare_camrcnn_gt_instances(batched_inputs, criterion=self.camera_heads.loss_criterion)
         predictions, detector_losses = self.camera_heads(
             features,
             proposals,
@@ -206,20 +205,19 @@ class CameraRCNN(nn.Module):
         from detectron2.utils.visualizer import Visualizer
         storage = get_event_storage()
         input = batched_inputs[0]
-        pitch_logits = proposals["pitch_logits"][0].detach().cpu().numpy().squeeze()
-        roll_logits = proposals["roll_logits"][0].detach().cpu().numpy().squeeze()
-        vfov_logits = proposals["vfov_logits"][0].detach().cpu().numpy().squeeze()
+        pitch_logits = proposals["pitch_logits"][:1].detach().float().cpu()
+        roll_logits = proposals["roll_logits"][:1].detach().float().cpu()
+        vfov_logits = proposals["vfov_logits"][:1].detach().float().cpu()
+        vfov, pitch, roll = convert_preds_to_angles(
+            vfov_logits,
+            pitch_logits,
+            roll_logits,
+            loss_type=self.loss_criterion,
+            return_type="np",
+        )
         img = input["image"]
         img = convert_image_to_rgb(img.permute(1, 2, 0), self.input_format)
-        pitch = bins2pitch(pitch_logits)
-        roll = bins2roll(roll_logits)
-        vfov = bins2vfov(vfov_logits)
-        gt_pitch = bins2pitch(nn.functional.one_hot(torch.as_tensor(
-            input["logits"]["gt_pitch"]), num_classes=len(pitch_logits)).float())
-        gt_roll = bins2roll(nn.functional.one_hot(torch.as_tensor(
-            input["logits"]["gt_roll"]), num_classes=len(roll_logits)).float())
-        gt_vfov = bins2vfov(nn.functional.one_hot(torch.as_tensor(
-            input["logits"]["gt_vfov"]), num_classes=len(vfov_logits)).float())
+        gt_vfov, gt_pitch, gt_roll = input["vfov"], input["pitch"], input["roll"]
         anno_img, _ = showHorizonLine(img, gt_vfov, gt_pitch, gt_roll)
         prop_img, _ = showHorizonLine(img, vfov, pitch, roll)
         v_gt = Visualizer(anno_img, None)
@@ -227,7 +225,7 @@ class CameraRCNN(nn.Module):
         texts = {}
         texts["pitch"] = gt_pitch
         texts["roll"] = gt_roll
-        texts["vfov"] = vfov
+        texts["vfov"] = gt_vfov
         v_gt = draw_labels(v_gt, texts)
         texts["pitch"] = pitch
         texts["roll"] = roll
@@ -394,15 +392,22 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         return ret
 
     def _get_camera_values(self, cls_logits):
-        vfov = prob_to_est(
-            cls_logits["vfov_logits"], self.vfov_bins_center, self.training,
-        )
-        pitch = prob_to_est(
-            cls_logits["pitch_logits"], self.pitch_bins_center, self.training,
-        )
-        roll = prob_to_est(
-            cls_logits["roll_logits"], self.roll_bins_center, self.training,
-        )
+        if self.camera_heads.loss_criterion in ('kl', 'ce'):
+            vfov = prob_to_est(
+                cls_logits["vfov_logits"], self.vfov_bins_center, self.training,
+            )
+            pitch = prob_to_est(
+                cls_logits["pitch_logits"], self.pitch_bins_center, self.training,
+            )
+            roll = prob_to_est(
+                cls_logits["roll_logits"], self.roll_bins_center, self.training,
+            )
+        else:
+            vfov = soft_idx_to_angle(get_softargmax(cls_logits["vfov_logits"]),
+                                     min=np.min(vfov_bins), max=np.max(vfov_bins))
+            pitch = soft_idx_to_angle(get_softargmax(cls_logits["pitch_logits"]),
+                                      min=np.min(pitch_bins), max=np.max(pitch_bins))
+            roll = soft_idx_to_angle(get_softargmax(cls_logits["roll_logits"]), min=-0.6, max=0.6)
         return vfov, pitch, roll
 
     def _call_accu_model(self, camrcnn_data: dict, grad_detach: bool = False):
@@ -719,15 +724,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         return proposals, target_proposals, detector_losses
 
     def _forward_camrcnn(self, batched_inputs: List[Dict[str, torch.Tensor]], features, proposals):
-        gt_instances = [
-            dict(
-                gt_pitch=x["logits"]["gt_pitch"],
-                gt_roll=x["logits"]["gt_roll"],
-                gt_vfov=x["logits"]["gt_vfov"],
-            )
-            if "logits" in x else {}
-            for x in batched_inputs
-        ]
+        gt_instances = prepare_camrcnn_gt_instances(batched_inputs, criterion=self.camera_heads.loss_criterion)
         predictions, detector_losses = self.camera_heads(
             features,
             proposals,
@@ -859,7 +856,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         dt_logits = {k: v[:len(dt_inputs)] for k, v in cls_logits.items()}
         vfov_est, pitch_est, roll_est = self._get_camera_values(dt_logits)
         camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est}
-        if not self.point_net_on and self.height_on and self.height_on:
+        if not self.point_net_on and self.height_on:
             camera_height_key = "camera_height"
             camrcnn_data["yc_est"] = torch.as_tensor(
                 [x[camera_height_key] for x in dt_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)
@@ -914,26 +911,30 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
             results = GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
             results = [x["instances"] for x in results]
+        # NOTE: Should only skip the problematic
+        empty_set = [x for x in results if len(x) <= 0]
+        non_empty_set = [x for x in results if len(x) >= 1]
         cam_logits, _ = self.camera_heads(features, _add_whole_image_as_proposal(images, self.device), None)
         vfov_est, pitch_est, roll_est = self._get_camera_values(cam_logits)
-        camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est}
-        if not self.point_net_on and self.height_on and self.height_on:
-            camera_height_key = "camera_height"
-            camrcnn_data["yc_est"] = torch.as_tensor(
-                [x[camera_height_key] for x in batched_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)
-        if self.height_on:
-            camrcnn_data, _ = self._camrcnn_predictions(
-                results,
-                camrcnn_data,
-            )
-            if self.height_refine_on and camrcnn_data:
-                camrcnn_data, _ = self._camrcnn_refine(
+        camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, **cam_logits}
+        if non_empty_set:
+            if not self.point_net_on and self.height_on:
+                camera_height_key = "camera_height"
+                camrcnn_data["yc_est"] = torch.as_tensor(
+                    [x[camera_height_key] for x in batched_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)
+            if self.height_on:
+                camrcnn_data, _ = self._camrcnn_predictions(
+                    non_empty_set,
                     camrcnn_data,
                 )
-                # Either assign new values in Instances object or use camrcnn_data downstream
-                for m, h, prop in zip(camrcnn_data["mask"], camrcnn_data["pred_height"], results):
-                    prop.pred_height = h[:m.sum()]
-        return results, camrcnn_data
+                if self.height_refine_on and camrcnn_data:
+                    camrcnn_data, _ = self._camrcnn_refine(
+                        camrcnn_data,
+                    )
+                    # Either assign new values in Instances object or use camrcnn_data downstream
+                    for m, h, prop in zip(camrcnn_data["mask"], camrcnn_data["pred_height"], results):
+                        prop.pred_height = h[:m.sum()]
+        return empty_set + non_empty_set, camrcnn_data
 
     def visualize_training_camrcnn(self, batched_inputs, proposals):
         """
@@ -950,20 +951,19 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         storage = get_event_storage()
         idx = [i for i, x in enumerate(batched_inputs) if "logits" in x][0]
         input = batched_inputs[idx]
-        pitch_logits = proposals["pitch_logits"][idx].detach().cpu().numpy().squeeze()
-        roll_logits = proposals["roll_logits"][idx].detach().cpu().numpy().squeeze()
-        vfov_logits = proposals["vfov_logits"][idx].detach().cpu().numpy().squeeze()
+        pitch_logits = proposals["pitch_logits"][:1].detach().float().cpu()
+        roll_logits = proposals["roll_logits"][:1].detach().float().cpu()
+        vfov_logits = proposals["vfov_logits"][:1].detach().float().cpu()
+        vfov, pitch, roll = convert_preds_to_angles(
+            vfov_logits,
+            pitch_logits,
+            roll_logits,
+            loss_type=self.camera_heads.loss_criterion,
+            return_type="np",
+        )
         img = input["image"]
         img = convert_image_to_rgb(img.permute(1, 2, 0), self.input_format)
-        pitch = bins2pitch(pitch_logits)
-        roll = bins2roll(roll_logits)
-        vfov = bins2vfov(vfov_logits)
-        gt_pitch = bins2pitch(nn.functional.one_hot(torch.as_tensor(
-            input["logits"]["gt_pitch"]), num_classes=len(pitch_logits)).float())
-        gt_roll = bins2roll(nn.functional.one_hot(torch.as_tensor(
-            input["logits"]["gt_roll"]), num_classes=len(roll_logits)).float())
-        gt_vfov = bins2vfov(nn.functional.one_hot(torch.as_tensor(
-            input["logits"]["gt_vfov"]), num_classes=len(vfov_logits)).float())
+        gt_vfov, gt_pitch, gt_roll = input["vfov"], input["pitch"], input["roll"]
         anno_img, _ = showHorizonLine(img, gt_vfov, gt_pitch, gt_roll)
         prop_img, _ = showHorizonLine(img, vfov, pitch, roll)
         v_gt = Visualizer(anno_img, None)
@@ -995,6 +995,8 @@ def draw_labels(visualizer, texts):
     # Start above left bottom corner
     start_y = visualizer.img.shape[0] - padding_bottom - line_height * (n - 1)
     for i, (k, v) in enumerate(items):
+        if isinstance(v, Iterable):
+            v = v[0]
         visualizer.draw_text(
             f"{k}: {v:.4f}",
             (x, start_y + i * line_height),
@@ -1004,3 +1006,27 @@ def draw_labels(visualizer, texts):
         )
 
     return visualizer
+
+
+def prepare_camrcnn_gt_instances(batched_inputs: List[Dict[str, torch.Tensor]], criterion: str = "kl"):
+    if criterion in ("kl", "ce"):
+        gt_instances = [
+            dict(
+                gt_pitch=x["logits"]["gt_pitch"],
+                gt_roll=x["logits"]["gt_roll"],
+                gt_vfov=x["logits"]["gt_vfov"],
+            )
+            if "logits" in x else {}
+            for x in batched_inputs
+        ]
+    else:
+        gt_instances = [
+            dict(
+                gt_pitch=pitch2soft_idx(x["pitch"]),
+                gt_roll=roll2soft_idx(x["roll"]),
+                gt_vfov=vfov2soft_idx(x["vfov"]),
+            )
+            if "pitch" in x else {}
+            for x in batched_inputs
+        ]
+    return gt_instances

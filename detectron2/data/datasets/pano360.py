@@ -97,7 +97,7 @@ pitch_bins_centers = pitch_bins.copy()
 pitch_bins_centers[:-1] += np.diff(pitch_bins_centers) / 2
 pitch_bins_centers = np.append(pitch_bins_centers, pitch_bins[-1])
 
-horizon_bins = np.linspace(-1.0, 0.95, 255)
+horizon_bins = np.linspace(-0.5, 1.5, 255)
 horizon_bins_centers = horizon_bins.copy()
 horizon_bins_centers[:-1] += np.diff(horizon_bins_centers) / 2
 horizon_bins_centers = np.append(horizon_bins_centers, horizon_bins[-1])
@@ -107,7 +107,7 @@ roll_bins_centers = roll_bins.copy()
 roll_bins_centers[:-1] += np.diff(roll_bins_centers) / 2
 roll_bins_centers = np.append(roll_bins_centers, roll_bins[-1])
 
-vfov_bins = np.linspace(0.2389, 1.6, 255)
+vfov_bins = np.linspace(0.2617, 2.1, 255)
 vfov_bins_centers = vfov_bins.copy()
 vfov_bins_centers[:-1] += np.diff(vfov_bins_centers) / 2
 vfov_bins_centers = np.append(vfov_bins_centers, vfov_bins[-1])
@@ -179,7 +179,8 @@ class CalibDataset:
         json_name: str = "datasets/train_crops_dataset_cvpr_myDistWider.json",
         debug: bool = False,
         debug_train_size: int = 1000,
-        debug_eval_size: int = 200,
+        debug_eval_size: int = 100,
+        loss_criterion: str = "kl",
     ):
         if logger is None:
             self.logger = logging.getLogger(__name__)
@@ -192,11 +193,16 @@ class CalibDataset:
         max_load = -1 if not debug else debug_train_size
         self.data = self.data[:max_load]  # Only use 100 examples
         random.shuffle(self.data)
-        train_load = -2000 if not debug else -debug_eval_size
+        train_load = -5000 if not debug else -debug_eval_size
         if train:
             self.data = self.data[:train_load]
         else:
             self.data = self.data[train_load:]
+        self.loss_type = loss_criterion
+        valid_criterions = ('kl', 'ce', 'softargmax_l2', 'softargmax_l2_biased')
+        if loss_criterion not in valid_criterions:
+            msg = f"The criterion is invalid. Got {loss_criterion} not in {valid_criterions}"
+            raise ValueError(msg)
 
     def __getitem__(self, k):
         with open(self.data[k][:-4] + ".json") as fhdl:
@@ -212,6 +218,7 @@ class CalibDataset:
         pitch_idx = np.digitize(pitch, pitch_bins)
         roll_idx = np.digitize(roll, roll_bins)
         vfov_idx = np.digitize(vfov, vfov_bins)
+
         return dict(
             source="pano360",
             file_name=im_path,
@@ -239,3 +246,103 @@ class CalibDataset:
 
     def __len__(self):
         return len(self.data)
+
+
+# Based on PARE: https://github.com/mkocabas/PARE/tree/master
+def _softmax(tensor, temperature, dim=-1):
+    return torch.nn.functional.softmax(tensor * temperature, dim=dim)
+
+
+def softargmax1d(
+        heatmaps,
+        temperature=None,
+        normalize_keypoints=True,
+):
+    dtype, device = heatmaps.dtype, heatmaps.device
+    if temperature is None:
+        temperature = torch.tensor(1.0, dtype=dtype, device=device)
+    batch_size, num_channels, dim = heatmaps.shape
+    points = torch.arange(0, dim, device=device, dtype=dtype).reshape(1, 1, dim).expand(batch_size, -1, -1)
+    # y = torch.arange(0, height, device=device, dtype=dtype).reshape(1, 1, height, 1).expand(batch_size, -1, -1, width)
+    # Should be Bx2xHxW
+
+    # points = torch.cat([x, y], dim=1)
+    normalized_heatmap = _softmax(
+        heatmaps.reshape(batch_size, num_channels, -1),
+        temperature=temperature.reshape(1, -1, 1),
+        dim=-1)
+
+    # Should be BxJx2
+    keypoints = (normalized_heatmap.reshape(batch_size, -1, dim) * points).sum(dim=-1)
+
+    if normalize_keypoints:
+        # Normalize keypoints to [-1, 1]
+        keypoints = (keypoints / (dim - 1) * 2 - 1)
+
+    return keypoints, normalized_heatmap.reshape(
+        batch_size, -1, dim)
+
+
+def angle_to_soft_idx(angle, min, max):
+    return 2 * ((angle - min) / (max - min)) - 1
+
+
+def vfov2soft_idx(angle):
+    return angle_to_soft_idx(angle, min=np.min(vfov_bins), max=np.max(vfov_bins))
+
+
+def pitch2soft_idx(angle):
+    return angle_to_soft_idx(angle, min=np.min(pitch_bins), max=np.max(pitch_bins))
+
+
+def roll2soft_idx(angle):
+    return angle_to_soft_idx(angle, min=-0.6, max=0.6)
+
+
+def horizon2soft_idx(angle):
+    return angle_to_soft_idx(angle, min=np.min(horizon_bins), max=np.max(horizon_bins))
+
+
+def soft_idx_to_angle(soft_idx, min, max):
+    return (max - min) * ((soft_idx + 1) / 2) + min
+
+
+def get_softargmax(pred):
+    pred = pred.unsqueeze(1)  # (N, 1, 256)
+    pred_argmax, _ = softargmax1d(pred, normalize_keypoints=True)  # (N, 1, 1)
+    pred_argmax = pred_argmax.reshape(-1)
+    return pred_argmax
+
+
+def convert_soft_idx_to_angle(vfov, pitch, roll):
+    vfov_angle = soft_idx_to_angle(vfov, min=np.min(vfov_bins), max=np.max(vfov_bins))
+    pitch_angle = soft_idx_to_angle(pitch, min=np.min(pitch_bins), max=np.max(pitch_bins))
+    roll_angle = soft_idx_to_angle(roll, min=-0.6, max=0.6)
+    return vfov_angle, pitch_angle, roll_angle
+
+
+@torch.no_grad()
+def convert_preds_to_angles(pred_vfov, pred_pitch, pred_roll, loss_type='kl', return_type='torch', legacy=False):
+    if loss_type in ('kl', 'ce'):
+        pred_vfov = bins2vfov(pred_vfov)
+        pred_pitch = bins2pitch(pred_pitch)
+        pred_roll = bins2roll(pred_roll)
+    elif loss_type in ('softargmax_l2', 'softargmax_l2_biased'):
+        pred_vfov = soft_idx_to_angle(get_softargmax(pred_vfov),
+                                      min=np.min(vfov_bins), max=np.max(vfov_bins))
+        pred_pitch = soft_idx_to_angle(get_softargmax(pred_pitch),
+                                       min=np.min(pitch_bins), max=np.max(pitch_bins))
+        if not legacy:
+            pred_roll = soft_idx_to_angle(get_softargmax(pred_roll), min=-0.6, max=0.6)
+        else:
+            pred_roll = bins2roll(pred_roll)
+
+    if return_type == 'np' and isinstance(pred_vfov, torch.Tensor):
+        return pred_vfov.cpu().numpy(), \
+            pred_pitch.cpu().numpy(), \
+            pred_roll.cpu().numpy()
+
+    if return_type == 'torch' and isinstance(pred_vfov, np.ndarray):
+        return torch.from_numpy(pred_vfov), torch.from_numpy(pred_pitch), torch.from_numpy(pred_roll)
+
+    return pred_vfov, pred_pitch, pred_roll

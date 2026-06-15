@@ -33,6 +33,8 @@ PANO_TRAIN_NAME = "Pano360_train"
 PANO_VAL_NAME = "Pano360_val"
 COCO_SCALE_DATASET_NAME = "COCOScale2017_train"
 COCO_SCALE_VAL_DATASET_NAME = "COCOScale2017_val"
+COCO_DATASET_NAME = "COCO2017_train"
+COCO_VAL_DATASET_NAME = "COCO2017_val"
 COCO_SCALE_CALIB_DATASET_NAME = "COCOScale2017Calib_train"
 
 KITTY_TRAIN_NAME = "Kitty_train"
@@ -42,18 +44,20 @@ KITTY_LABEL_DIR = os.path.join(KITTY_ROOT, "data_object_label_2", "training", "l
 KITTY_OUTPUT_JSON = os.path.join("data", "Kitty", "kitti_coco.json")
 
 
-def register_datasets(keypoint_on: bool = False, debug: bool = True):
+def register_datasets(keypoint_on: bool = False, debug: bool = True, loss_criterion: str = "kl"):
     calib_train = CalibDataset(
         train=True,
         json_name="datasets/pano360_crops_dataset_cvpr_myDistWider_train.json",
         logger=None,
         debug=debug,
+        loss_criterion=loss_criterion,
     )
     calib_val = CalibDataset(
         train=False,
         json_name="datasets/pano360_crops_dataset_cvpr_myDistWider_train.json",
         logger=None,
         debug=debug,
+        loss_criterion=loss_criterion,
     )
     DatasetCatalog.register(PANO_TRAIN_NAME, calib_train)
     DatasetCatalog.register(PANO_VAL_NAME, calib_val)
@@ -96,11 +100,14 @@ def register_datasets(keypoint_on: bool = False, debug: bool = True):
         "results_with_kps_20200225_val2017_test_detOnly_filtered_2-8_moreThan2" / "pickle",
     )
     coco_meta = _get_builtin_metadata("coco_person")
-    coco_scale_val_dataset_name = "COCOScale2017_val"
-    if coco_scale_val_dataset_name in DatasetCatalog:
-        DatasetCatalog.remove(coco_scale_val_dataset_name)
-    DatasetCatalog.register(coco_scale_val_dataset_name, coco_scale_val)
+    DatasetCatalog.register(COCO_SCALE_VAL_DATASET_NAME, coco_scale_val)
     MetadataCatalog.get(COCO_SCALE_VAL_DATASET_NAME).set(
+        json_file=coco_keypoints_val_path, image_root=coco_val_images_root_path, evaluator_type="coco", **coco_meta,
+        thing_dataset_id_to_contiguous_id={1: 0}  # COCO ID 1 → internal ID 0
+    )
+    coco_meta = _get_builtin_metadata("coco_person")
+    DatasetCatalog.register(COCO_VAL_DATASET_NAME, coco_scale_val)
+    MetadataCatalog.get(COCO_VAL_DATASET_NAME).set(
         json_file=coco_keypoints_val_path, image_root=coco_val_images_root_path, evaluator_type="coco", **coco_meta,
         thing_dataset_id_to_contiguous_id={1: 0}  # COCO ID 1 → internal ID 0
     )
@@ -199,7 +206,7 @@ def invoke_main():
 
 def main(args):
     cfg = setup(args)
-    register_datasets(cfg.MODEL.KEYPOINT_ON, args.debug)
+    register_datasets(cfg.MODEL.KEYPOINT_ON, args.debug, cfg.MODEL.CAMERA_HEAD.LOSS_CRITERION)
     if len(cfg.DATASETS.TRAIN) > 1:
         raise ValueError("This is script is not intended for multiple datasets")
     if cfg.DATASETS.TRAIN[0] == PANO_TRAIN_NAME:

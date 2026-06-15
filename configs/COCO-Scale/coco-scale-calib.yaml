@@ -26,7 +26,7 @@ MODEL:
     REFINE_LAYERS: 2  # Only applies at HEIGHT_REFINE_ON: TRUE
 DATASETS:
   TRAIN: ("COCOScale2017Calib_train", )
-  TEST: ()
+  TEST: ("Pano360_val", "COCOScale2017_val",)
 SOLVER:
   # The dataset total size is 187206, 2000 for validation.
   IMS_PER_BATCH: 9  # 9 for 3 gpus 3 for 1
