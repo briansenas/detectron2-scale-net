@@ -12,6 +12,7 @@ from detectron2.data.datasets.pano360 import (
     pitch_bins,
     pitch_bins_centers,
     roll2soft_idx,
+    roll_bins,
     roll_bins_centers,
     showHorizonLine,
     soft_idx_to_angle,
@@ -856,11 +857,11 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         dt_logits = {k: v[:len(dt_inputs)] for k, v in cls_logits.items()}
         vfov_est, pitch_est, roll_est = self._get_camera_values(dt_logits)
         camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est}
-        if not self.point_net_on and self.height_on:
-            camera_height_key = "camera_height"
-            camrcnn_data["yc_est"] = torch.as_tensor(
-                [x[camera_height_key] for x in dt_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)
         if self.height_on:
+            if not self.point_net_on:
+                camera_height_key = "camera_height"
+                camrcnn_data["yc_est"] = torch.as_tensor(
+                    [x[camera_height_key] for x in dt_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)
             camrcnn_data, vt_loss = self._camrcnn_predictions(
                 target_proposals,
                 camrcnn_data,
@@ -915,21 +916,19 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
             results = GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
             results = [x["instances"] for x in results]
-        # NOTE: Should only skip the problematic
-        empty_set = [x for x in results if len(x) <= 0]
-        non_empty_set = [x for x in results if len(x) >= 1]
         camrcnn_data = {}
         if self.height_on or camera_data:
+            non_empty_preds = [x for x in results if len(x) >= 1]
             cam_logits, _ = self.camera_heads(features, _add_whole_image_as_proposal(images, self.device), None)
             vfov_est, pitch_est, roll_est = self._get_camera_values(cam_logits)
             camrcnn_data = {"vfov_est": vfov_est, "pitch_est": pitch_est, "roll_est": roll_est, **cam_logits}
-            if non_empty_set and self.height_on:
+            if non_empty_preds and self.height_on:
                 if not self.point_net_on:
                     camera_height_key = "camera_height"
                     camrcnn_data["yc_est"] = torch.as_tensor(
                         [x[camera_height_key] for x in batched_inputs], dtype=vfov_est.dtype, device=vfov_est.device).unsqueeze(1)
                 camrcnn_data, _ = self._camrcnn_predictions(
-                    non_empty_set,
+                    non_empty_preds,
                     camrcnn_data,
                 )
                 if self.height_refine_on and camrcnn_data:
@@ -937,9 +936,9 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                         camrcnn_data,
                     )
                     # Either assign new values in Instances object or use camrcnn_data downstream
-                    for m, h, prop in zip(camrcnn_data["mask"], camrcnn_data["pred_height"], results):
+                    for m, h, prop in zip(camrcnn_data["mask"], camrcnn_data["pred_height"], non_empty_preds):
                         prop.pred_height = h[:m.sum()]
-        return empty_set + non_empty_set, camrcnn_data
+        return results, camrcnn_data
 
     def visualize_training_camrcnn(self, batched_inputs, proposals):
         """

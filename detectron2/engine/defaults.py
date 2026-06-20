@@ -36,10 +36,9 @@ from detectron2.data.samplers import InferenceSampler, TrainingSampler
 from detectron2.evaluation import (
     COCOEvaluator,
     COCOScaleEvaluator,
-    COCOScaleEvaluatorVT,
+    COCOScaleEvaluatorAndVT,
     DatasetEvaluator,
     KittyEvaluator,
-    Pano360Evaluator,
     Pano360EvaluatorME,
     inference_on_dataset,
     print_csv_format,
@@ -837,9 +836,10 @@ class CalibTrainer(DefaultTrainer):
             return build_detection_test_loader(
                 cfg,
                 dataset_name,
+                batch_size=cfg.SOLVER.TEST_IMS_PER_BATCH,
                 mapper=CalibMapper(cfg, is_train=False),
             )
-        return build_detection_test_loader(cfg, dataset_name)
+        return build_detection_test_loader(cfg, dataset_name, batch_size=cfg.SOLVER.TEST_IMS_PER_BATCH)
 
     @classmethod
     def build_evaluator(cls, cfg, dataset_name):
@@ -869,9 +869,10 @@ class COCOScaleTrainer(DefaultTrainer):
             return build_detection_test_loader(
                 cfg,
                 dataset_name,
+                batch_size=cfg.SOLVER.TEST_IMS_PER_BATCH,
                 mapper=COCOScaleMapper(cfg, is_train=False),
             )
-        return build_detection_test_loader(cfg, dataset_name)
+        return build_detection_test_loader(cfg, dataset_name, batch_size=cfg.SOLVER.TEST_IMS_PER_BATCH)
 
     @classmethod
     def build_evaluator(cls, cfg, dataset_name):
@@ -918,6 +919,7 @@ class HybridScaleTrainer(HybridTrainer):
         return build_detection_test_loader(
             dataset=dataset,
             num_workers=cfg.DATALOADER.NUM_WORKERS,
+            batch_size=cfg.SOLVER.TEST_IMS_PER_BATCH,
             mapper=mapper,
             sampler=InferenceSampler(len(dataset))
             if not isinstance(dataset, torchdata.IterableDataset)
@@ -927,7 +929,7 @@ class HybridScaleTrainer(HybridTrainer):
     @classmethod
     def build_evaluator(cls, cfg, dataset_name):
         if "COCOScale" in dataset_name and cfg.MODEL.HEIGHT_ON:
-            return COCOScaleEvaluatorVT()
+            return COCOScaleEvaluatorAndVT(dataset_name=dataset_name, output_dir=cfg.OUTPUT_DIR)
         elif "COCOScale" in dataset_name or "COCO2017" in dataset_name:
             return COCOScaleEvaluator(dataset_name=dataset_name, output_dir=cfg.OUTPUT_DIR)
         elif "Pano" in dataset_name:
@@ -1005,6 +1007,7 @@ class KittyCalibTrainer(HybridTrainer):
         return build_detection_test_loader(
             dataset=dataset,
             num_workers=cfg.DATALOADER.NUM_WORKERS,
+            batch_size=cfg.SOLVER.TEST_IMS_PER_BATCH,
             mapper=mapper,
             sampler=InferenceSampler(len(dataset))
             if not isinstance(dataset, torchdata.IterableDataset)

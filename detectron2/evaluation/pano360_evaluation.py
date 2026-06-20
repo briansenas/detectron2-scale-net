@@ -19,7 +19,7 @@ class Pano360Evaluator(DatasetEvaluator):
     def process(self, inputs, outputs):
         batch_size = len(inputs)
         if isinstance(outputs, tuple):
-            preds, outputs = outputs
+            _, outputs = outputs
 
         for key in ["pitch", "roll", "vfov"]:
             logits = outputs[f"{key}_logits"]
@@ -98,7 +98,7 @@ class Pano360EvaluatorME(DatasetEvaluator):
 
     def process(self, inputs, outputs):
         if isinstance(outputs, tuple):
-            preds, outputs = outputs
+            _, outputs = outputs
         pred_vfov_logits = outputs["vfov_logits"].cpu()
         pred_pitch_logits = outputs["pitch_logits"].cpu()
         pred_roll_logits = outputs["roll_logits"].cpu()
@@ -115,17 +115,11 @@ class Pano360EvaluatorME(DatasetEvaluator):
             return_type="np",
         )
 
-        vfov_err = np.abs(
-            np.degrees(pred_vfov) - np.degrees(gt_vfov)
-        ).sum()
+        vfov_err = np.rad2deg(np.abs(pred_vfov - gt_vfov).sum())
 
-        pitch_err = np.abs(
-            np.degrees(pred_pitch) - np.degrees(gt_pitch)
-        ).sum()
+        pitch_err = np.rad2deg(np.abs(pred_pitch - gt_pitch).sum())
 
-        roll_err = np.abs(
-            np.degrees(pred_roll) - np.degrees(gt_roll)
-        ).sum()
+        roll_err = np.rad2deg(np.abs(pred_roll - gt_roll).sum())
 
         batch_size = len(inputs)
 

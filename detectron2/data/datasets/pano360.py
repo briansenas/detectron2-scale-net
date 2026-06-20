@@ -107,6 +107,11 @@ roll_bins_centers = roll_bins.copy()
 roll_bins_centers[:-1] += np.diff(roll_bins_centers) / 2
 roll_bins_centers = np.append(roll_bins_centers, roll_bins[-1])
 
+roll_new_bins = np.linspace(-0.6, 0.6, 255)
+roll_new_bins_centers = roll_new_bins.copy()
+roll_new_bins_centers[:-1] += np.diff(roll_new_bins_centers) / 2
+roll_new_bins_centers = np.append(roll_new_bins_centers, roll_new_bins[-1])
+
 vfov_bins = np.linspace(0.2617, 2.1, 255)
 vfov_bins_centers = vfov_bins.copy()
 vfov_bins_centers[:-1] += np.diff(vfov_bins_centers) / 2
@@ -155,7 +160,7 @@ def bins2pitch(bins):
 
 def bins2roll(bins):
     idxes = np.argmax(bins, axis=bins.ndim - 1)
-    return roll_bins_centers[idxes]
+    return roll_new_bins_centers[idxes]
 
 
 def bins2vfov(bins):

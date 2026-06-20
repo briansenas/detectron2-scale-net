@@ -99,17 +99,21 @@ def register_datasets(keypoint_on: bool = False, debug: bool = True, loss_criter
         coco_scale_pickle_path=coco_scalenet_results_path /
         "results_with_kps_20200225_val2017_test_detOnly_filtered_2-8_moreThan2" / "pickle",
     )
-    coco_meta = _get_builtin_metadata("coco_person")
     DatasetCatalog.register(COCO_SCALE_VAL_DATASET_NAME, coco_scale_val)
     MetadataCatalog.get(COCO_SCALE_VAL_DATASET_NAME).set(
-        json_file=coco_keypoints_val_path, image_root=coco_val_images_root_path, evaluator_type="coco", **coco_meta,
-        thing_dataset_id_to_contiguous_id={1: 0}  # COCO ID 1 → internal ID 0
+        json_file=coco_keypoints_val_path,
+        image_root=coco_val_images_root_path,
+        evaluator_type="coco",
+        **coco_meta,
+        thing_dataset_id_to_contiguous_id={1: 0},  # COCO ID 1 → internal ID 0
     )
-    coco_meta = _get_builtin_metadata("coco_person")
     DatasetCatalog.register(COCO_VAL_DATASET_NAME, coco_scale_val)
     MetadataCatalog.get(COCO_VAL_DATASET_NAME).set(
-        json_file=coco_keypoints_val_path, image_root=coco_val_images_root_path, evaluator_type="coco", **coco_meta,
-        thing_dataset_id_to_contiguous_id={1: 0}  # COCO ID 1 → internal ID 0
+        json_file=coco_keypoints_val_path,
+        image_root=coco_val_images_root_path,
+        evaluator_type="coco",
+        **coco_meta,
+        thing_dataset_id_to_contiguous_id={1: 0},  # COCO ID 1 → internal ID 0
     )
 
     # This is need due to internal consistency checks of d2 for keypoints_on
@@ -244,12 +248,15 @@ def main(args):
 
         calib_state_dict = load_state_dict(args.resume_from)
         if args.resume_from_filter_name:
+            print(f"Filtering for module: {args.resume_from_filter_name}")
             # Filter only camera_head weights
             calib_state_dict = {
                 k: v
                 for k, v in calib_state_dict.items()
                 if args.resume_from_filter_name in k
             }
+        else:
+            print(f"Using the whole model from --resume-from: {args.resume_from}")
         # Merge both state dicts to have the full state dict to load. Make sure the argument is filtered.
         model_state_dict.update(calib_state_dict)
         # Load into trainer.model
