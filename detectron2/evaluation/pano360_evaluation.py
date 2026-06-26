@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from detectron2.data.datasets.pano360 import convert_preds_to_angles
+from detectron2.data.pano360_utils import convert_preds_to_angles
 from detectron2.utils import comm
 
 from .evaluator import DatasetEvaluator

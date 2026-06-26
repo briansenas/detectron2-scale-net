@@ -19,7 +19,8 @@ class COCOScaleEvaluatorVT(DatasetEvaluator):
     def process(self, inputs, outputs):
         batch_size = len(inputs)
 
-        vt_loss = outputs[1]["vt_loss"]
+        # NOTE: Now I could record each layer vt_loss if needed
+        vt_loss = outputs[1]["vt_losses"][-1]
 
         if hasattr(vt_loss, "item"):
             vt_loss = vt_loss.item()
@@ -59,7 +60,8 @@ class COCOScaleEvaluatorAndVT(COCOEvaluator):
         super().process(inputs, [{"instances": x for x in preds}])
         batch_size = len(inputs)
 
-        vt_loss = camrcnn_data["vt_loss"]
+        # NOTE: Now I could record each layer vt_loss if needed
+        vt_loss = camrcnn_data["vt_losses"][-1]
 
         if hasattr(vt_loss, "item"):
             vt_loss = vt_loss.item()

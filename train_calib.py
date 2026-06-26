@@ -44,20 +44,18 @@ KITTY_LABEL_DIR = os.path.join(KITTY_ROOT, "data_object_label_2", "training", "l
 KITTY_OUTPUT_JSON = os.path.join("data", "Kitty", "kitti_coco.json")
 
 
-def register_datasets(keypoint_on: bool = False, debug: bool = True, loss_criterion: str = "kl"):
+def register_datasets(keypoint_on: bool = False, debug: bool = True):
     calib_train = CalibDataset(
         train=True,
         json_name="datasets/pano360_crops_dataset_cvpr_myDistWider_train.json",
         logger=None,
         debug=debug,
-        loss_criterion=loss_criterion,
     )
     calib_val = CalibDataset(
         train=False,
         json_name="datasets/pano360_crops_dataset_cvpr_myDistWider_train.json",
         logger=None,
         debug=debug,
-        loss_criterion=loss_criterion,
     )
     DatasetCatalog.register(PANO_TRAIN_NAME, calib_train)
     DatasetCatalog.register(PANO_VAL_NAME, calib_val)
@@ -139,16 +137,15 @@ def register_datasets(keypoint_on: bool = False, debug: bool = True, loss_criter
         **coco_meta,
         thing_dataset_id_to_contiguous_id={1: 0},  # COCO ID 1 → internal ID 0
     )
-    kitty_dataset_name = "Kitty_train"
     DatasetCatalog.register(
-        kitty_dataset_name,
+        KITTY_TRAIN_NAME,
         KITTICocoDataset(
             KITTY_OUTPUT_JSON,
             KITTY_IMAGE_DIR,
         )
     )
     coco_meta = _get_builtin_metadata("coco")
-    MetadataCatalog.get(kitty_dataset_name).set(
+    MetadataCatalog.get(KITTY_TRAIN_NAME).set(
         thing_dataset_id_to_contiguous_id={1: 0, 3: 1}  # COCO ID 1 → internal ID 0
     )
 
@@ -187,11 +184,6 @@ def build_args():
         "--resume-from-resume",
         action="store_true",
     )
-    parser.add_argument(
-        "--freeze-backbone",
-        action="store_true",
-        help="To freeze the backbone of the model. Useful if we intented to initialize the camera classifier heads",
-    )
     return parser.parse_args()
 
 
@@ -208,11 +200,7 @@ def invoke_main():
     )
 
 
-def main(args):
-    cfg = setup(args)
-    register_datasets(cfg.MODEL.KEYPOINT_ON, args.debug, cfg.MODEL.CAMERA_HEAD.LOSS_CRITERION)
-    if len(cfg.DATASETS.TRAIN) > 1:
-        raise ValueError("This is script is not intended for multiple datasets")
+def init_trainer(cfg):
     if cfg.DATASETS.TRAIN[0] == PANO_TRAIN_NAME:
         trainer = CalibTrainer(cfg)
     elif cfg.DATASETS.TRAIN[0] == COCO_SCALE_DATASET_NAME:
@@ -234,6 +222,15 @@ def main(args):
                 cfg.DATASETS.TRAIN,
             )
         )
+    return trainer
+
+
+def main(args):
+    cfg = setup(args)
+    register_datasets(cfg.MODEL.KEYPOINT_ON, args.debug)
+    if len(cfg.DATASETS.TRAIN) > 1:
+        raise ValueError("This is script is not intended for multiple datasets")
+    trainer = init_trainer(cfg)
     if args.resume_from:
         print(f"Resuming from previous experiment: {args.resume_from}")
         trainer.resume_or_load(resume=args.resume_from_resume)
@@ -255,6 +252,7 @@ def main(args):
                 for k, v in calib_state_dict.items()
                 if args.resume_from_filter_name in k
             }
+            print(f"Filtered keys: {sorted(calib_state_dict.keys())}")
         else:
             print(f"Using the whole model from --resume-from: {args.resume_from}")
         # Merge both state dicts to have the full state dict to load. Make sure the argument is filtered.
@@ -262,13 +260,11 @@ def main(args):
         # Load into trainer.model
         missing, unexpected = model.load_state_dict(model_state_dict, strict=False)
 
-        print("Loaded camera_head weights into trainer.model")
         print("Missing keys:", missing)
         print("Unexpected keys:", unexpected)
     else:
         trainer.resume_or_load(resume=args.resume)
-    if args.freeze_backbone:
-        trainer.model.backbone.eval()
+    # trainer.test(cfg, trainer.model)
     trainer.train()
 
 

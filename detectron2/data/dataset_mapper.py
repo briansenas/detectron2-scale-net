@@ -150,7 +150,7 @@ class DatasetMapper:
             instances.gt_boxes = instances.gt_masks.get_bounding_boxes()
         dataset_dict["instances"] = utils.filter_empty_instances(instances)
 
-    def __call__(self, dataset_dict):
+    def __call__(self, dataset_dict, remove_annotations_for_test: bool = True):
         """
         Args:
             dataset_dict (dict): Metadata of one image, in Detectron2 Dataset format.
@@ -196,7 +196,7 @@ class DatasetMapper:
                 proposal_topk=self.proposal_topk,
             )
 
-        if not self.is_train:
+        if not self.is_train and remove_annotations_for_test:
             # USER: Modify this if you want to keep them for some reason.
             dataset_dict.pop("annotations", None)
             dataset_dict.pop("sem_seg_file_name", None)
@@ -452,6 +452,6 @@ class HybridDataMapper(DatasetMapper):
 
 class KittyMapper(DatasetMapper):
     def __call__(self, dataset_dict):
-        result_dict = super().__call__(dataset_dict)
+        result_dict = super().__call__(dataset_dict, remove_annotations_for_test=False)
         result_dict["instances"].object_height = torch.as_tensor([x["object_height"] for x in dataset_dict["annotations"]])
         return result_dict

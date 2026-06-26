@@ -4,10 +4,10 @@ import torch
 from torch import nn
 
 from detectron2.config import configurable
-from detectron2.data.datasets.pano360 import COCO_SCALE_STATS, softargmax1d
 from detectron2.data.detection_utils import person_h_list_loss, prob_to_est
+from detectron2.data.pano360_utils import COCO_SCALE_STATS, softargmax1d
 from detectron2.layers import ShapeSpec, nonzero_tuple
-from detectron2.structures import Boxes, ImageList, Instances, Keypoints, pairwise_iou
+from detectron2.structures import Boxes, ImageList, Instances, pairwise_iou
 from detectron2.utils.events import get_event_storage
 from detectron2.utils.registry import Registry
 
@@ -972,6 +972,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         keypoint_head: Optional[nn.Module] = None,
         train_on_pred_boxes: bool = False,
         padded_input_size: int = 10,
+        reduce_method: str = "softmax",
         height_pooler: Optional[ROIPooler] = None,
         height_in_features: Optional[List[str]] = None,
         height_temperature: Optional[float] = 1.0,
@@ -998,6 +999,7 @@ class HeightStandardROIHeads(StandardROIHeads):
             train_on_pred_boxes=train_on_pred_boxes,
             **kwargs,
         )
+        self.reduce_method = reduce_method
         self.padded_input_size = padded_input_size
         self.height_on = height_cls_score is not None
         self.height_pooler = height_pooler
@@ -1072,6 +1074,7 @@ class HeightStandardROIHeads(StandardROIHeads):
             )
             nn.init.normal_(height_cls_score.weight, std=0.01)
             nn.init.constant_(height_cls_score.bias, 0)
+            ret["reduce_method"] = cfg.MODEL.HEIGHT_HEAD.REDUCE_METHOD
             ret["height_cls_score"] = height_cls_score
             ret["height_predictor"] = height_predictor
             # Create buffers for fast GPU lookup
@@ -1161,7 +1164,8 @@ class HeightStandardROIHeads(StandardROIHeads):
         )
         all_person_hs = prob_to_est(
             self.height_cls_score(self.height_predictor(features)) / self.height_temperature,
-            self.class_bins[training_class_idxs])
+            self.class_bins[training_class_idxs],
+            self.reduce_method)
         del features
         if self.training:
             losses["height_loss"] = person_h_list_loss(

@@ -5,6 +5,9 @@ MODEL:
   PROPOSAL_GENERATOR:
     NAME: "PrecomputedProposals"
   KEYPOINT_ON: False
+  # Freeze the whole backbone to fine tune the calibration heads.
+  BACKBONE:
+    FREEZE_AT: 5
 DATASETS:
   TRAIN: ("Pano360_train", )
   TEST: ("Pano360_val", )
@@ -30,3 +33,4 @@ DATALOADER:
 VIS_PERIOD: 500
 FLOAT32_PRECISION: "medium"
 SEED: 140421
+OUTPUT_DIR: "output/calib-only-1gpu-biasl2"
