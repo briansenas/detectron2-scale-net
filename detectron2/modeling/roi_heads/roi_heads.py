@@ -4,8 +4,8 @@ import torch
 from torch import nn
 
 from detectron2.config import configurable
-from detectron2.data.datasets.pano360 import human_bins, softargmax1d
 from detectron2.data.detection_utils import person_h_list_loss, prob_to_est
+from detectron2.data.pano360_utils import human_bins, softargmax1d
 from detectron2.layers import ShapeSpec, nonzero_tuple
 from detectron2.structures import Boxes, ImageList, Instances, Keypoints, pairwise_iou
 from detectron2.utils.events import get_event_storage
@@ -1006,6 +1006,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         keypoint_head: Optional[nn.Module] = None,
         train_on_pred_boxes: bool = False,
         padded_input_size: int = 10,
+        reduce_method: str = "softmax",
         height_predictor: Optional[nn.Module] = None,
         height_cls_score: Optional[nn.Module] = None,
         height_temperature: Optional[float] = 1.0,
@@ -1030,6 +1031,7 @@ class HeightStandardROIHeads(StandardROIHeads):
             **kwargs,
         )
         self.padded_input_size = padded_input_size
+        self.reduce_method = reduce_method
         self.height_loss_weight = height_loss_weight
         self.height_on = height_predictor is not None
         self.height_temperature = height_temperature
@@ -1080,6 +1082,7 @@ class HeightStandardROIHeads(StandardROIHeads):
         # If we set the number of Conv3x to 0 and FC-2
         # We will have the same predictor as Jerry
         if cfg.MODEL.HEIGHT_ON:
+            ret["reduce_method"] = cfg.MODEL.HEIGHT_HEAD.REDUCE_METHOD
             ret["height_loss_weight"] = cfg.MODEL.HEIGHT_HEAD.LOSS_WEIGHT
             ret["height_temperature"] = cfg.MODEL.HEIGHT_HEAD.TEMPERATURE
             ret["height_discount_from"] = cfg.MODEL.HEIGHT_HEAD.DISCOUNT_FROM
@@ -1261,7 +1264,8 @@ class HeightStandardROIHeads(StandardROIHeads):
             keypoint_rcnn_inference_no_heatmap(self.keypoint_head.layers(features), instances)
         if self.height_on:
             all_person_hs = prob_to_est(
-                self.height_cls_score(self.height_predictor(features)) / self.height_temperature, self.human_bins
+                self.height_cls_score(self.height_predictor(features)) /
+                self.height_temperature, self.human_bins, self.reduce_method
             )
             del features
             num_instances_per_image = [len(i) for i in instances]

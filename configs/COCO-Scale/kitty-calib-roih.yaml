@@ -1,20 +1,18 @@
-_BASE_: "../COCO-Keypoints/keypoint_rcnn_R_50_FPN_3x.yaml"
+_BASE_: "../COCO-Detection/faster_rcnn_R_50_FPN_3x.yaml"
 MODEL:
-  WEIGHTS: "output/calib-only-1gpu-biasl2/model_final.pth"
+  WEIGHTS: "output/kitty-calib-v1/model_final.pth"
   META_ARCHITECTURE: "GeneralizedCamRCNN"
   ROI_HEADS:
     NAME: "HeightStandardROIHeads"
   ROI_BOX_HEAD:
     BBOX_REG_LOSS_WEIGHT: 10.0
   ROI_KEYPOINT_HEAD:
-    NAME: "KRCNNConvDeconvUpsampleHeadHeightPred"
+    NAME: "KRCNNConvDeconvUpsampleHead"
     LOSS_WEIGHT: 10.0
-  KEYPOINT_ON: True
-  HEIGHT_ON: False
+  KEYPOINT_ON: False
+  HEIGHT_ON: True
   POINT_NET_ON: False
-  HEIGHT_REFINE_ON: False
-  HEIGHT_MEAN: 1.75
-  HEIGHT_STD: 0.2
+  HEIGHT_REFINE_ON: True
   HEIGHT_HEAD:
     LOSS_WEIGHT: 0.05
     SMOOTH_L1_BETA: 0.1
@@ -28,14 +26,17 @@ MODEL:
     REFINE_LAYERS: 2  # Only applies at HEIGHT_REFINE_ON: TRUE
 DATASETS:
   TRAIN: ("COCOScale2017Calib_train", )
-  TEST: ("Pano360_val", "COCOScale2017_val",)
+  TEST: ()
 SOLVER:
   # The dataset total size is 187206, 2000 for validation.
-  IMS_PER_BATCH: 9  # 9 for 3 gpus 3 for 1
+  # IMS_PER_BATCH: 4 (No Height + AMP) - 3 (Height + AMP) - 2 (Height + Refine + AMP) - (2 Height + Refine)
+  # ASSUMING RATIO (3,1) -- which we can also tune if batch size is hard to
+  # With refine we can try 2x(4, 2) or just scale with more than 1 gpu.
+  IMS_PER_BATCH: 6  # 2-1gpu 6-3gpu
   RATIO_PANO360: (3, 1)  # 3 COCO, 1 CALIB
-  BASE_LR: 0.01054 # 0.01054 for 3 gpus 0.003515 for 1 (diverges?)
-  STEPS: (60000, 80000)
-  MAX_ITER: 90000
+  BASE_LR: 0.007031  # 0.002343 1gpu 0.007031 3 gpu (diverges?)
+  STEPS: (2500, 4000)
+  MAX_ITER: 5000
   AMP:
     ENABLED: True
   CLIP_GRADIENTS:
@@ -44,7 +45,7 @@ SOLVER:
     ENABLED: true
     NORM_TYPE: 2.0
 TEST:
-  EVAL_PERIOD: 2000
+  EVAL_PERIOD: 0
 DATALOADER:
   NUM_WORKERS: 2
   FILTER_EMPTY_ANNOTATIONS: False
@@ -52,4 +53,3 @@ DATALOADER:
 VIS_PERIOD: 500
 FLOAT32_PRECISION: "medium"
 SEED: 140421
-OUTPUT_DIR: "output/coco-scale-kps-biasl2"

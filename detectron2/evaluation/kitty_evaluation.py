@@ -39,7 +39,6 @@ class KittyEvaluator(DatasetEvaluator):
             matched_idxs, labels = self.matcher(iou_matrix)
 
             valid_mask = labels == 1
-
             if valid_mask.sum() == 0:
                 continue
 

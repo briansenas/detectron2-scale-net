@@ -10,6 +10,7 @@ from .lvis_evaluation import LVISEvaluator
 from .pano360_evaluation import Pano360Evaluator
 from .cocoscale_evaluation import COCOScaleEvaluator
 from .cocoscale_evaluation import COCOScaleEvaluatorVT
+from .cocoscale_evaluation import COCOScaleEvaluatorAndVT
 from .kitty_evaluation import KittyEvaluator
 from .pano360_evaluation import Pano360EvaluatorME
 from .panoptic_evaluation import COCOPanopticEvaluator

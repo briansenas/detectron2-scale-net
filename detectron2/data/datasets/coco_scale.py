@@ -31,7 +31,7 @@ class COCOScale2017:
         else:
             self.logger = logger
 
-        self.coco_data = load_coco_json(coco_json_file_path, coco_image_root_path)
+        # self.coco_data = load_coco_json(coco_json_file_path, coco_image_root_path)
         self.is_train = split == "train"
 
         # Estimated GT from coco files using a calibrated model?
@@ -76,13 +76,12 @@ class COCOScale2017:
             data = pickle.load(fhdl)
         im_path = self.img_files[k]
         bboxes = data["bboxes"].astype(np.float32)
-        horizon = pitch = vfov = roll = -1
+        pitch = vfov = roll = -1
         if self.is_train:
             camera_parameters = loadmat(self.camera_parameters_files[k])
             pitch = camera_parameters["pitch"][0][0].astype(np.float32)
             vfov = camera_parameters["vfov"][0][0].astype(np.float32)
             roll = camera_parameters["roll"][0][0].astype(np.float32)
-            horizon = camera_parameters["horizon"][0][0].astype(np.float32)
         instances = []
         if "kps" in data:
             kps_gt = data["kps"].astype(int).tolist()
@@ -107,7 +106,6 @@ class COCOScale2017:
             pitch=pitch,
             vfov=vfov,
             roll=roll,
-            horizon=horizon,
             annotations=instances
         )
 
@@ -203,6 +201,7 @@ class KITTICocoDataset:
             })
 
         return {
+            "source": "kitty",
             "file_name": str(self.image_root / img["file_name"]),
             "image_id": img_id,
             "camera_height": 1.65,

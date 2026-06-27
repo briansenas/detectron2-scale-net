@@ -671,29 +671,39 @@ def softmax_with_bins(input, bins):
 
 
 def argmax_with_bins(input, bins):
-    # input: [N, D], bins: [D]
-    # return: [N]
-    if bins.dim() == 1:
-        idxx = torch.argmax(input, dim=1)
-        est_batch = bins[idxx]
+    """
+    Args:
+        input: [N, D] logits
+        bins:
+            - [D]     : shared bins for all samples
+            - [N, D]  : per-sample bins
+
+    Returns:
+        [N]
+    """
+    indices = input.argmax(dim=1)  # [N]
+
+    if bins.ndim == 1:
+        # Shared bins
+        return bins[indices]
+
+    elif bins.ndim == 2:
+        # Per-sample bins
+        return bins.gather(1, indices.unsqueeze(1)).squeeze(1)
+
     else:
-        # input: [N, D], bins: [N, D]
-        # return: [N]
-        N, D = input.shape
-
-        # Get the index of the max logit for each row: [N]
-        idxx = torch.argmax(input, dim=1)
-        # Use advanced indexing to pick the bin at (row_i, idxx_i)
-        # bins[0, idxx[0]], bins[1, idxx[1]], ...
-        est_batch = bins[torch.arange(N), idxx]
-    return est_batch
+        raise ValueError(
+            f"Expected bins to have shape [D] or [N, D], got {bins.shape}"
+        )
 
 
-def prob_to_est(input, bins, is_training: bool = True):
-    if is_training:
+def prob_to_est(input, bins, reduce_method: str = "softmax"):
+    if reduce_method == "softmax":
         return softmax_with_bins(input, bins)
-    else:
+    elif reduce_method == "argmax":
         return argmax_with_bins(input, bins)
+    else:
+        raise ValueError("Unknown reduce_method")
 
 
 def get_straighten_ratio_from_kps(keypoints, kp_thresh=2):

@@ -36,7 +36,7 @@ from detectron2.data.samplers import InferenceSampler, TrainingSampler
 from detectron2.evaluation import (
     COCOEvaluator,
     COCOScaleEvaluator,
-    COCOScaleEvaluatorVT,
+    COCOScaleEvaluatorAndVT,
     DatasetEvaluator,
     KittyEvaluator,
     Pano360EvaluatorME,
@@ -836,9 +836,10 @@ class CalibTrainer(DefaultTrainer):
             return build_detection_test_loader(
                 cfg,
                 dataset_name,
+                batch_size=cfg.SOLVER.TEST_IMS_PER_BATCH,
                 mapper=CalibMapper(cfg, is_train=False),
             )
-        return build_detection_test_loader(cfg, dataset_name)
+        return build_detection_test_loader(cfg, dataset_name, batch_size=cfg.SOLVER.TEST_IMS_PER_BATCH)
 
     @classmethod
     def build_evaluator(cls, cfg, dataset_name):
@@ -868,9 +869,10 @@ class COCOScaleTrainer(DefaultTrainer):
             return build_detection_test_loader(
                 cfg,
                 dataset_name,
+                batch_size=cfg.SOLVER.TEST_IMS_PER_BATCH,
                 mapper=COCOScaleMapper(cfg, is_train=False),
             )
-        return build_detection_test_loader(cfg, dataset_name)
+        return build_detection_test_loader(cfg, dataset_name, batch_size=cfg.SOLVER.TEST_IMS_PER_BATCH)
 
     @classmethod
     def build_evaluator(cls, cfg, dataset_name):
@@ -901,8 +903,6 @@ class HybridTrainer(DefaultTrainer):
         """
         return build_optimizer_overrides(cfg, model, overrides={"camera_heads": {"lr": cfg.SOLVER.BASE_LR / (cfg.SOLVER.RATIO_PANO360[0])}})
 
-
-class HybridScaleTrainer(HybridTrainer):
     @classmethod
     def build_test_loader(cls, cfg, dataset_name):
         """
@@ -912,11 +912,16 @@ class HybridScaleTrainer(HybridTrainer):
         dataset = get_detection_dataset_dicts(
             dataset_name, False, 0, None, check_consistency=True
         )
-        mapper = COCOScaleMapper(
-            cfg, is_train=False) if "COCOScale" in dataset_name else CalibMapper(cfg, is_train=False)
+        if "Kitty" in dataset_name:
+            mapper = KittyMapper(cfg, is_train=False)
+        elif "COCOScale" in dataset_name or "COCO2017" in dataset_name:
+            mapper = COCOScaleMapper(cfg, is_train=False)
+        elif "Pano" in dataset_name:
+            mapper = CalibMapper(cfg, is_train=False)
         return build_detection_test_loader(
             dataset=dataset,
             num_workers=cfg.DATALOADER.NUM_WORKERS,
+            batch_size=cfg.SOLVER.TEST_IMS_PER_BATCH,
             mapper=mapper,
             sampler=InferenceSampler(len(dataset))
             if not isinstance(dataset, torchdata.IterableDataset)
@@ -925,13 +930,18 @@ class HybridScaleTrainer(HybridTrainer):
 
     @classmethod
     def build_evaluator(cls, cfg, dataset_name):
+        if "Kitty" in dataset_name:
+            return KittyEvaluator()
         if "COCOScale" in dataset_name and cfg.MODEL.HEIGHT_ON:
-            return COCOScaleEvaluatorVT()
+            return COCOScaleEvaluatorAndVT(dataset_name=dataset_name, output_dir=cfg.OUTPUT_DIR)
         elif "COCOScale" in dataset_name or "COCO2017" in dataset_name:
             return COCOScaleEvaluator(dataset_name=dataset_name, output_dir=cfg.OUTPUT_DIR)
         elif "Pano" in dataset_name:
-            return Pano360EvaluatorME()
-        raise ValueError("Unknown dataset for this trainer")
+            return Pano360EvaluatorME(cfg.MODEL.CAMERA_HEAD.LOSS_CRITERION)
+        raise ValueError("Evaluator not implemented in trainer")
+
+
+class HybridScaleTrainer(HybridTrainer):
 
     @classmethod
     def build_train_loader(cls, cfg):
@@ -994,27 +1004,6 @@ class HybridScaleTrainer(HybridTrainer):
 
 
 class KittyCalibTrainer(HybridTrainer):
-    @classmethod
-    def build_test_loader(cls, cfg, dataset_name):
-        dataset = get_detection_dataset_dicts(
-            dataset_name, True, 0, None, check_consistency=True
-        )
-        mapper = KittyMapper(cfg, is_train=True)
-        return build_detection_test_loader(
-            dataset=dataset,
-            num_workers=cfg.DATALOADER.NUM_WORKERS,
-            mapper=mapper,
-            sampler=InferenceSampler(len(dataset))
-            if not isinstance(dataset, torchdata.IterableDataset)
-            else None
-        )
-
-    @classmethod
-    def build_evaluator(cls, cfg, dataset_name):
-        if "Kitty" in dataset_name:
-            return KittyEvaluator()
-        raise ValueError("Evaluator not implemented in trainer")
-
     @classmethod
     def build_train_loader(cls, cfg):
         """
