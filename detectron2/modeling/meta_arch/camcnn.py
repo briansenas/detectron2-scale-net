@@ -597,7 +597,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             "v0": v0_pred.clone().detach() if grad_detach else v0_pred,
             "f_pixels_est": f_estim.clone().detach() if grad_detach else f_estim,
             # Copy so that we can detach sometimes
-            "roll_est": roll_est,
+            "roll_est": roll_est.unsqueeze(1),
             "eps": eps,
             "vt_losses": [],
         }
@@ -638,9 +638,9 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             )
             prop_img, _ = showHorizonLine(
                 v_pred.get_output().get_image(),
-                texts["vfov"],
-                texts["pitch"],
-                texts["roll"],
+                vfov_est[i].detach().cpu().numpy()[0],
+                pitch_est[i].detach().cpu().numpy()[0],
+                roll_est[i].detach().cpu().numpy()[0],
             )
             images.append(prop_img)
         return images
@@ -695,9 +695,9 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 )
             prop_img, _ = showHorizonLine(
                 v_pred.get_output().get_image(),
-                texts["vfov"],
-                texts["pitch"],
-                texts["roll"],
+                vfov_est[i].detach().cpu().numpy()[0],
+                pitch_est[i].detach().cpu().numpy()[0],
+                roll_est[i].detach().cpu().numpy()[0],
             )
             vis_img = np.concatenate((anno_img, prop_img), axis=1)
             vis_img = vis_img.transpose(2, 0, 1)
@@ -903,7 +903,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         self,
         batched_inputs: List[Dict[str, torch.Tensor]],
         detected_instances: Optional[List[Instances]] = None,
-        do_postprocess: bool = False,
+        do_postprocess: bool = True,
         camera_data: bool = False,
     ):
         assert not self.training

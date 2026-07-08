@@ -5,7 +5,7 @@ from detectron2.data import DatasetCatalog, MetadataCatalog
 from detectron2.data.build import get_detection_dataset_dicts
 from detectron2.data.datasets.builtin_meta import _get_builtin_metadata
 from detectron2.data.datasets.coco_scale import COCOScale2017, COCOScale2017Calib, KITTICocoDataset
-from detectron2.data.datasets.pano360 import CalibDataset
+from detectron2.data.datasets.pano360 import CalibDataset, CameraRegressorDataset
 from detectron2.engine import (
     CalibTrainer,
     COCOScaleTrainer,
@@ -45,16 +45,12 @@ KITTY_OUTPUT_JSON = os.path.join("data", "Kitty", "kitti_coco.json")
 
 
 def register_datasets(keypoint_on: bool = False, debug: bool = True):
-    calib_train = CalibDataset(
-        train=True,
-        json_name="datasets/pano360_crops_dataset_cvpr_myDistWider_train.json",
-        logger=None,
+    calib_train = CameraRegressorDataset(
+        is_train=True,
         debug=debug,
     )
-    calib_val = CalibDataset(
-        train=False,
-        json_name="datasets/pano360_crops_dataset_cvpr_myDistWider_train.json",
-        logger=None,
+    calib_val = CameraRegressorDataset(
+        is_train=False,
         debug=debug,
     )
     DatasetCatalog.register(PANO_TRAIN_NAME, calib_train)
@@ -184,6 +180,10 @@ def build_args():
         "--resume-from-resume",
         action="store_true",
     )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+    )
     return parser.parse_args()
 
 
@@ -264,8 +264,10 @@ def main(args):
         print("Unexpected keys:", unexpected)
     else:
         trainer.resume_or_load(resume=args.resume)
-    # trainer.test(cfg, trainer.model)
-    trainer.train()
+    if args.test:
+        trainer.test(cfg, trainer.model)
+    else:
+        trainer.train()
 
 
 if __name__ == "__main__":

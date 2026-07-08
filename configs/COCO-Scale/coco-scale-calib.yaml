@@ -19,11 +19,17 @@ MODEL:
   POINT_NET:
     POOLING: "max"
     TEMPERATURE: 1.0
-    BN: True
+    BN: False
     TRANSFORM: True
     DETACH: False
     REFINE_TEMPERATURE: 1.0
     REFINE_LAYERS: 2  # Only applies at HEIGHT_REFINE_ON: TRUE
+  CAMERA_HEAD:
+    LOSS_CRITERION: "softargmax_l2_biased"
+    PITCH_WEIGHT: 10.
+    ROLL_WEIGHT: 10.
+    VFOV_WEIGHT: 10.
+    NUM_CONV: 4
 DATASETS:
   TRAIN: ("COCOScale2017Calib_train", )
   TEST: ("Pano360_val", "COCOScale2017_val",)
@@ -47,7 +53,7 @@ DATALOADER:
   NUM_WORKERS: 2
   FILTER_EMPTY_ANNOTATIONS: False
   ASPECT_RATIO_GROUPING: True
-VIS_PERIOD: 500
+VIS_PERIOD: 2000
 FLOAT32_PRECISION: "medium"
 SEED: 140421
 OUTPUT_DIR: "output/coco-scale-biasl2"

@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+import numpy as np
 import torch
 
 from detectron2.evaluation import DatasetEvaluator
@@ -19,11 +20,11 @@ class KittyEvaluator(DatasetEvaluator):
     def reset(self):
         self.height_error_sum = 0.0
         self.num_matches = 0
+        self.num_samples = 0
+        self.vt_loss = 0
 
     def process(self, inputs, outputs):
-
-        outputs, _ = outputs
-
+        outputs, camrcnn_data = outputs
         for inp, out in zip(inputs, outputs):
             gt = inp["instances"].to("cpu")
             pred = out.to("cpu")
@@ -57,11 +58,17 @@ class KittyEvaluator(DatasetEvaluator):
 
             self.height_error_sum += errors.sum().item()
             self.num_matches += len(errors)
+        if "vt_losses" in camrcnn_data:
+            vt_losses = torch.as_tensor(camrcnn_data["vt_losses"])
+            self.vt_loss += vt_losses[-1].item()
+            self.num_samples += 1
 
     def evaluate(self):
         stats = {
             "height_error_sum": self.height_error_sum,
             "num_matches": self.num_matches,
+            "vt_loss": self.vt_loss,
+            "num_samples": self.num_samples,
         }
 
         all_stats = comm.gather(stats, dst=0)
@@ -78,6 +85,14 @@ class KittyEvaluator(DatasetEvaluator):
             x["num_matches"]
             for x in all_stats
         )
+        total_samples = sum(
+            x["num_samples"]
+            for x in all_stats
+        )
+        total_vt = sum(
+            x["vt_loss"]
+            for x in all_stats
+        )
 
         if total_matches == 0:
             return {
@@ -90,4 +105,6 @@ class KittyEvaluator(DatasetEvaluator):
         return {
             "kitty_height_mae": mae,
             "kitty_num_matches": total_matches,
+            "kitty_num_samples": total_samples,
+            "kitty_vt_loss_mean": total_vt / total_samples
         }

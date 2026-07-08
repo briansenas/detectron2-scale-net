@@ -1179,7 +1179,6 @@ class HeightStandardROIHeads(StandardROIHeads):
         return instances, losses
 
 
-@ROI_HEADS_REGISTRY.register()
 class CameraHead(ROIHeads):
     @configurable
     def __init__(
