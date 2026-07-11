@@ -20,13 +20,15 @@ class COCOScaleEvaluatorVT(DatasetEvaluator):
         batch_size = len(inputs)
 
         # NOTE: Now I could record each layer vt_loss if needed
-        vt_loss = outputs[1]["vt_losses"][-1]
+        _, camrcnn_data = outputs
+        if "vt_losses" in camrcnn_data:
+            vt_loss = camrcnn_data["vt_losses"][-1]
 
-        if hasattr(vt_loss, "item"):
-            vt_loss = vt_loss.item()
+            if hasattr(vt_loss, "item"):
+                vt_loss = vt_loss.item()
 
-        self.vt_loss_sum += vt_loss * batch_size
-        self.num_samples += batch_size
+            self.vt_loss_sum += vt_loss * batch_size
+            self.num_samples += batch_size
 
     def evaluate(self):
         stats = {
@@ -61,13 +63,14 @@ class COCOScaleEvaluatorAndVT(COCOEvaluator):
         batch_size = len(inputs)
 
         # NOTE: Now I could record each layer vt_loss if needed
-        vt_loss = camrcnn_data["vt_losses"][-1]
+        if "vt_losses" in camrcnn_data:
+            vt_loss = camrcnn_data["vt_losses"][-1]
 
-        if hasattr(vt_loss, "item"):
-            vt_loss = vt_loss.item()
+            if hasattr(vt_loss, "item"):
+                vt_loss = vt_loss.item()
 
-        self.vt_loss_sum += vt_loss * batch_size
-        self.num_samples += batch_size
+            self.vt_loss_sum += vt_loss * batch_size
+            self.num_samples += batch_size
 
     def evaluate(self):
         # Do normal COCO Evaluation to see impact on detection

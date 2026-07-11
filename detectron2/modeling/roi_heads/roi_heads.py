@@ -1102,78 +1102,6 @@ class HeightStandardROIHeads(StandardROIHeads):
             ret["height_std"] = cfg.MODEL.HEIGHT_STD
         return ret
 
-    def _add_gt_to_pred(
-        self,
-        pred_instances,
-        gt_instances,
-        iou_thresh=0.5,
-    ):
-        matcher = Matcher([iou_thresh], [0, 1], allow_low_quality_matches=False)
-        results = []
-        M = min(max([inst.pred_boxes.tensor.shape[0] for inst in pred_instances]), self.padded_input_size)
-        for preds, gts in zip(pred_instances, gt_instances):
-            device = preds.pred_boxes.tensor.device
-            if len(preds) > 0:
-                pred_boxes = preds.pred_boxes
-                pred_classes = preds.pred_classes
-                gt_boxes = gts.gt_boxes
-                iou_matrix = pairwise_iou(gt_boxes, pred_boxes)
-                matched_idxs, labels = matcher(iou_matrix)
-                # Positive matches
-                valid_mask = labels == 1
-                # keep only valid matches
-                matched_idxs = matched_idxs[valid_mask]
-                pred_boxes.tensor = pred_boxes.tensor[valid_mask]
-                gt_fields = {}
-                for k, v in gts.get_fields().items():
-                    if isinstance(v, torch.Tensor):
-                        gt_fields[k] = v[matched_idxs]
-                    else:
-                        # e.g. Boxes, BitMasks, etc.
-                        gt_fields[k] = v[matched_idxs]
-                pred_boxes = pred_boxes.tensor
-            else:
-                pred_boxes = torch.zeros((0, 4), device=device)
-                pred_classes = torch.zeros((0,), dtype=torch.long, device=device) - 1  # Set the class to background
-                valid_mask = torch.zeros_like(pred_classes, dtype=torch.bool, device=device)
-                gt_fields = {
-                    k: v
-                    for k, v in gts.get_fields().items()
-                }
-
-            valid_mask = torch.ones(gt_fields["gt_boxes"].tensor.shape[0], dtype=bool, device=device)
-            valid_mask = pad_tensor(valid_mask, M, False)
-            pred_boxes = pad_tensor(pred_boxes, M, 0)
-            pred_classes = pad_tensor(pred_classes, M, -1)
-
-            inst = Instances(
-                image_size=preds.image_size if len(preds) > 0 else gts.image_size
-            )
-
-            inst.pred_boxes = Boxes(pred_boxes)
-            inst.proposal_boxes = Boxes(pred_boxes)
-            inst.pred_classes = pred_classes
-            inst.valid_mask = valid_mask
-            # Copy fields
-            for k, v in gt_fields.items():
-                if k == "gt_classes":
-                    setattr(inst, k, pad_tensor(v, M, -1))
-                elif isinstance(v, torch.Tensor):
-                    setattr(
-                        inst, k, pad_tensor(v, M, 0)
-                    )
-                else:
-                    if isinstance(v, Boxes):
-                        setattr(
-                            inst, k, Boxes(pad_tensor(v.tensor, M, 0))
-                        )
-                    if isinstance(v, Keypoints):
-                        setattr(
-                            inst, k, Keypoints(pad_tensor(v.tensor, M, 0))
-                        )
-            results.append(inst)
-        return results
-
     def _forward_keypoint(
         self,
         features: Dict[str, torch.Tensor],
@@ -1282,7 +1210,6 @@ class HeightStandardROIHeads(StandardROIHeads):
         return instances, losses
 
 
-@ROI_HEADS_REGISTRY.register()
 class CameraHead(ROIHeads):
     @configurable
     def __init__(

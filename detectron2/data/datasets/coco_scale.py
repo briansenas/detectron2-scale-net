@@ -92,7 +92,7 @@ class COCOScale2017:
                     category_id=0,
                     keypoints=kps,
                 ))
-        else:
+        elif "bboxes" in data:
             for bbox in bboxes[:10]:
                 instances.append(dict(
                     bbox=bbox.tolist(),

@@ -11,6 +11,7 @@ from typing import List, Optional, Union
 
 from . import detection_utils as utils
 from . import transforms as T
+from .pano360_utils import pitch_bins, roll_bins, vfov_bins
 
 """
 This file contains the default mapping that's applied to "dataset dicts".
@@ -274,6 +275,19 @@ class CalibMapper(DatasetMapper):
 
         if "annotations" in dataset_dict:
             self._transform_annotations(dataset_dict, transforms, image_shape)
+
+        # This assumes that HorizFlipTransform is the only one that does flip
+        do_hflip = sum(isinstance(t, T.HFlipTransform) for t in transforms.transforms) % 2 == 1
+        if do_hflip:
+            dataset_dict["roll"] *= -1
+        pitch_idx = np.digitize(dataset_dict["pitch"], pitch_bins)
+        roll_idx = np.digitize(dataset_dict["roll"], roll_bins)
+        vfov_idx = np.digitize(dataset_dict["vfov"], vfov_bins)
+        dataset_dict["logits"] = dict(
+            gt_pitch=pitch_idx,
+            gt_roll=roll_idx,
+            gt_vfov=vfov_idx,
+        )
         return dataset_dict
 
 

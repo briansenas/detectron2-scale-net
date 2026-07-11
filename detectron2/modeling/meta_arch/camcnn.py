@@ -611,26 +611,6 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         # losses.update({"consistency_loss": loss_consistency})
         return camrcnn_data, losses
 
-    def _draw_labels(self, visualizer, texts):
-        x = 10  # left padding
-        line_height = 15
-        padding_bottom = 30
-        items = sorted(texts.items())
-        n = len(items)
-
-        # Start above left bottom corner
-        start_y = visualizer.img.shape[0] - padding_bottom - line_height * (n - 1)
-        for i, (k, v) in enumerate(items):
-            visualizer.draw_text(
-                f"{k}: {v:.4f}",
-                (x, start_y + i * line_height),
-                color="white",
-                horizontal_alignment="left",
-                font_size=10
-            )
-
-        return visualizer
-
     def visualize_prediction(self, batched_inputs, instances, camrcnn_data: dict):
         from detectron2.utils.visualizer import Visualizer
         max_vis_prop = 10
@@ -922,7 +902,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         self,
         batched_inputs: List[Dict[str, torch.Tensor]],
         detected_instances: Optional[List[Instances]] = None,
-        do_postprocess: bool = False,
+        do_postprocess: bool = True,
         camera_data: bool = False,
     ):
         assert not self.training

@@ -8,6 +8,12 @@ MODEL:
   # Freeze the whole backbone to fine tune the calibration heads.
   BACKBONE:
     FREEZE_AT: 5
+  CAMERA_HEAD:
+    LOSS_CRITERION: "softargmax_l2_biased"
+    PITCH_WEIGHT: 10.
+    ROLL_WEIGHT: 10.
+    VFOV_WEIGHT: 10.
+    NUM_CONV: 4
 DATASETS:
   TRAIN: ("Pano360_train", )
   TEST: ("Pano360_val", )
@@ -30,7 +36,7 @@ DATALOADER:
   NUM_WORKERS: 2
   FILTER_EMPTY_ANNOTATIONS: False
   ASPECT_RATIO_GROUPING: True
-VIS_PERIOD: 500
+VIS_PERIOD: 2000
 FLOAT32_PRECISION: "medium"
 SEED: 140421
 OUTPUT_DIR: "output/calib-only-1gpu-biasl2"
