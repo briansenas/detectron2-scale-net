@@ -4,7 +4,7 @@ import torch
 
 from detectron2.evaluation import DatasetEvaluator
 from detectron2.modeling.matcher import Matcher
-from detectron2.structures import pairwise_iou
+from detectron2.structures import Instances, pairwise_iou
 from detectron2.utils import comm
 
 
@@ -21,6 +21,8 @@ class KittyEvaluator(DatasetEvaluator):
         self.height_error_sum = 0.0
         self.num_matches = 0
         self.num_samples = 0
+        self.num_empty_samples = 0
+        self.num_invalid_samples = 0
         self.vt_loss = 0
 
     def process(self, inputs, outputs):
@@ -28,12 +30,27 @@ class KittyEvaluator(DatasetEvaluator):
         for inp, out in zip(inputs, outputs):
             gt = inp["instances"].to("cpu")
             pred = out.to("cpu")
+            # We need to resize the gt boxes using the different in image size
+            # Following the implementation of detector_postprocess
+            # Due to .inference(...do_postprocess=True)
+            gt_height, gt_width = gt.image_size
+            pred_height, pred_width = pred.image_size
+            scale_x, scale_y = (
+                pred_width / gt_width,
+                pred_height / gt_height,
+            )
+            new_size = (pred_height, pred_width)
+            results = Instances(new_size, **gt.get_fields())
+            gt_boxes = results.gt_boxes
+            gt_boxes.scale(scale_x, scale_y)
+            gt_boxes.clip(results.image_size)
 
-            if len(gt) == 0 or len(pred) == 0:
+            if len(results) == 0 or len(pred) == 0:
+                self.num_empty_samples += 1
                 continue
 
             iou_matrix = pairwise_iou(
-                gt.gt_boxes,
+                results.gt_boxes,
                 pred.pred_boxes,
             )
 
@@ -41,9 +58,10 @@ class KittyEvaluator(DatasetEvaluator):
 
             valid_mask = labels == 1
             if valid_mask.sum() == 0:
+                self.num_invalid_samples += 1
                 continue
 
-            gt_heights = gt.object_height[
+            gt_heights = results.object_height[
                 matched_idxs[valid_mask]
             ]
 
@@ -69,6 +87,8 @@ class KittyEvaluator(DatasetEvaluator):
             "num_matches": self.num_matches,
             "vt_loss": self.vt_loss,
             "num_samples": self.num_samples,
+            "num_invalid_samples": self.num_invalid_samples,
+            "num_empty_samples": self.num_empty_samples,
         }
 
         all_stats = comm.gather(stats, dst=0)
@@ -93,6 +113,14 @@ class KittyEvaluator(DatasetEvaluator):
             x["vt_loss"]
             for x in all_stats
         )
+        total_invalid_samples = sum(
+            x["num_invalid_samples"]
+            for x in all_stats
+        )
+        total_empty_samples = sum(
+            x["num_empty_samples"]
+            for x in all_stats
+        )
 
         if total_matches == 0:
             return {
@@ -106,5 +134,7 @@ class KittyEvaluator(DatasetEvaluator):
             "kitty_height_mae": mae,
             "kitty_num_matches": total_matches,
             "kitty_num_samples": total_samples,
-            "kitty_vt_loss_mean": total_vt / total_samples
+            "kitty_vt_loss_mean": total_vt / total_samples,
+            "kitty_num_invalid_samples": total_invalid_samples,
+            "kitty_num_empty_samples": total_empty_samples,
         }
