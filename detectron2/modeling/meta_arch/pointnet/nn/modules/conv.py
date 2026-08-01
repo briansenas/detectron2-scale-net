@@ -1,6 +1,7 @@
 from torch import nn
 
 from ..init import init_bn
+from .bn import MaskedBatchNorm1d, MaskedBatchNorm2d
 
 
 class Conv1d(nn.Module):
@@ -22,15 +23,15 @@ class Conv1d(nn.Module):
         self.out_channels = out_channels
 
         self.conv = nn.Conv1d(in_channels, out_channels, kernel_size, bias=(not bn), **kwargs)
-        self.bn = nn.BatchNorm1d(out_channels, momentum=bn_momentum) if bn else None
+        self.bn = MaskedBatchNorm1d(out_channels, momentum=bn_momentum) if bn else None
         self.relu = nn.ReLU(inplace=True) if relu else None
 
         self.init_weights()
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         x = self.conv(x)
         if self.bn is not None:
-            x = self.bn(x)
+            x = self.bn(x, mask)
         if self.relu is not None:
             x = self.relu(x)
         return x
@@ -62,15 +63,15 @@ class Conv2d(nn.Module):
         self.out_channels = out_channels
 
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, bias=(not bn), **kwargs)
-        self.bn = nn.BatchNorm2d(out_channels, momentum=bn_momentum) if bn else None
+        self.bn = MaskedBatchNorm2d(out_channels, momentum=bn_momentum) if bn else None
         self.relu = nn.ReLU(inplace=True) if relu else None
 
         self.init_weights()
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         x = self.conv(x)
         if self.bn is not None:
-            x = self.bn(x)
+            x = self.bn(x, mask)
         if self.relu is not None:
             x = self.relu(x)
         return x

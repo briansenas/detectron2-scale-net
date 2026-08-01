@@ -35,10 +35,10 @@ class MLP(nn.ModuleList):
         assert dropout_prob >= 0.0
         self.dropout_prob = dropout_prob
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         for module in self:
             assert isinstance(module, FC)
-            x = module(x)
+            x = module(x, mask)
             if self.training and self.dropout_prob > 0.0:
                 x = F.dropout(x, p=self.dropout_prob, training=True)
         return x
@@ -92,10 +92,10 @@ class SharedMLP(nn.ModuleList):
         assert dropout_prob >= 0.0
         self.dropout_prob = dropout_prob
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         for module in self:
             assert isinstance(module, (Conv1d, Conv2d))
-            x = module(x)
+            x = module(x, mask)
             if self.training and self.dropout_prob > 0.0:
                 if self.ndim == 1:
                     x = F.dropout(x, p=self.dropout_prob, training=True)

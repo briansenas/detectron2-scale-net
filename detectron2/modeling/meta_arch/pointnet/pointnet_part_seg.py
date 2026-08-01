@@ -48,7 +48,7 @@ class Stem(nn.Module):
             # feature transform
             self.transform_feature = TNet(self.out_channels, self.out_channels)
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         """PointNet Stem forward
 
         Args:
@@ -66,7 +66,7 @@ class Stem(nn.Module):
 
         # input transform
         if self.with_transform:
-            trans_input = self.transform_input(x)
+            trans_input = self.transform_input(x, mask)
             x = torch.bmm(trans_input, x)
             end_points["trans_input"] = trans_input
 
@@ -79,7 +79,7 @@ class Stem(nn.Module):
 
         # feature transform
         if self.with_transform:
-            trans_feature = self.transform_feature(x)
+            trans_feature = self.transform_feature(x, mask)
             x = torch.bmm(trans_feature, x)
             end_points["trans_feature"] = trans_feature
 
@@ -313,7 +313,10 @@ class CamHPersonHPointNet(nn.Module):
         self.init_weights()
 
     def _max_pool(self, x: torch.Tensor, mask: torch.Tensor):
-        return torch.max(x.masked_fill(mask == 0, -1e4), 2)[0]
+        if mask is None:
+            return torch.max(x, 2)[0]
+        min_value = torch.finfo(x.dtype).min  # approx 9.77e-4 for FP16
+        return torch.max(x.masked_fill(mask == 0, min_value), 2)[0]
 
     def _avg_pool(self, x: torch.Tensor, mask: torch.Tensor):
         eps = torch.finfo(x.dtype).eps  # approx 9.77e-4 for FP16
@@ -335,7 +338,7 @@ class CamHPersonHPointNet(nn.Module):
         end_points = {}
 
         # stem
-        stem_feature, end_points_stem = self.stem(x)
+        stem_feature, end_points_stem = self.stem(x, mask)
         if self.with_transform:
             end_points["trans_input"] = end_points_stem["trans_input"]
             end_points["trans_feature"] = end_points_stem["trans_feature"]
@@ -345,7 +348,7 @@ class CamHPersonHPointNet(nn.Module):
         local_features = []
         x = stem_feature
         for _, mlp in enumerate(self.mlp_local):
-            x = mlp(x)
+            x = mlp(x, mask)
             local_features.append(x)
 
         # max pool over points
@@ -364,8 +367,8 @@ class CamHPersonHPointNet(nn.Module):
         global_feature_expand = global_feature.unsqueeze(2).expand(-1, -1, num_points)
 
         x = torch.cat(stem_features + local_features + [global_feature_expand], dim=1)
-        x = self.mlp_seg(x)
-        x = self.conv_seg(x)
+        x = self.mlp_seg(x, mask)
+        x = self.conv_seg(x, mask)
         seg_logit = self.seg_logit(x)
 
         preds.update({
@@ -390,41 +393,6 @@ class CamHPersonHPointNet(nn.Module):
         if self.with_bn:
             # Set batch normalization to 0.01 as default
             set_bn(self, momentum=0.01)
-
-
-class PointNetPartSegLoss(nn.Module):
-    """Pointnet part segmentation loss with optional regularization loss"""
-
-    def __init__(self, reg_weight, cls_loss_weight, seg_loss_weight):
-        super(PointNetPartSegLoss, self).__init__()
-        self.reg_weight = reg_weight
-        self.cls_loss_weight = cls_loss_weight
-        self.seg_loss_weight = seg_loss_weight
-        assert self.seg_loss_weight >= 0.0
-
-    def forward(self, preds, labels):
-        seg_logit = preds["seg_logit"]
-        seg_label = labels["seg_label"]
-        seg_loss = F.cross_entropy(seg_logit, seg_label)
-        loss_dict = {
-            "seg_loss": seg_loss * self.seg_loss_weight,
-        }
-
-        if self.cls_loss_weight > 0.0:
-            cls_logit = preds["cls_logit"]
-            cls_label = labels["cls_label"]
-            cls_loss = F.cross_entropy(cls_logit, cls_label)
-            loss_dict["cls_loss"] = cls_loss
-
-        # regularization over transform matrix
-        if self.reg_weight > 0.0:
-            trans_feature = preds["trans_feature"]
-            trans_norm = torch.bmm(trans_feature.transpose(2, 1), trans_feature)  # [in, in]
-            I = torch.eye(trans_norm.size(2), dtype=trans_norm.dtype, device=trans_norm.device)
-            reg_loss = F.mse_loss(trans_norm, I.unsqueeze(0).expand_as(trans_norm), reduction="sum")
-            loss_dict["reg_loss"] = reg_loss * (0.5 * self.reg_weight / trans_norm.size(0))
-
-        return loss_dict
 
 
 if __name__ == '__main__':

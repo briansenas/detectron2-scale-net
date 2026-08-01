@@ -1,6 +1,7 @@
 from torch import nn
 
 from ..init import init_bn
+from .bn import MaskedBatchNorm1d
 
 
 class FC(nn.Module):
@@ -22,13 +23,13 @@ class FC(nn.Module):
         self.out_channels = out_channels
 
         self.fc = nn.Linear(in_channels, out_channels, bias=(not bn))
-        self.bn = nn.BatchNorm1d(out_channels, momentum=bn_momentum) if bn else None
+        self.bn = MaskedBatchNorm1d(out_channels, momentum=bn_momentum) if bn else None
         self.relu = nn.ReLU(inplace=True) if relu else None
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         x = self.fc(x)
         if self.bn is not None:
-            x = self.bn(x)
+            x = self.bn(x, mask)
         if self.relu is not None:
             x = self.relu(x)
         return x

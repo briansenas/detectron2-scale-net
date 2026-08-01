@@ -19,8 +19,8 @@ DATASETS:
   TEST: ("Pano360_val", )
 SOLVER:
   # The dataset total size is 187206, 2000 for validation.
-  IMS_PER_BATCH: 36  # 16 for 1 gpu 48 for 3 gpus.
-  BASE_LR: 0.0140625   # 0.0046875 for 1 gpu 0.01875 for 3 gpu
+  IMS_PER_BATCH: 36  # 12 for 1 gpu 36 for 3 gpus.
+  BASE_LR: 0.0140625   # 0.0046875 for 1 gpu 0.01406 for 3 gpu
   STEPS: (60000, 80000)
   MAX_ITER: 90000
   AMP:

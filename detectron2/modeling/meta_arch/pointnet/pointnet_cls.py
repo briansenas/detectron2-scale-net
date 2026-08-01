@@ -41,7 +41,13 @@ class TNet(nn.Module):
 
         self.init_weights()
 
-    def forward(self, x):
+    def _max_pool(self, x: torch.Tensor, mask: torch.Tensor):
+        if mask is None:
+            return torch.max(x, 2)[0]
+        min_value = torch.finfo(x.dtype).min  # approx 9.77e-4 for FP16
+        return torch.max(x.masked_fill(mask == 0, min_value), 2)[0]
+
+    def forward(self, x, mask=None):
         """TNet forward
 
         Args:
@@ -52,7 +58,8 @@ class TNet(nn.Module):
 
         """
         x = self.mlp_local(x)  # (batch_size, local_channels[-1], num_points)
-        x, _ = torch.max(x, 2)  # (batch_size, local_channels[-1])
+        # x, _ = torch.max(x, 2)  # (batch_size, local_channels[-1])
+        x = self._max_pool(x, mask)
         x = self.mlp_global(x)
         x = self.linear(x)
         x = x.view(-1, self.out_channels, self.in_channels)
@@ -99,7 +106,7 @@ class Stem(nn.Module):
             # feature transform
             self.transform_feature = TNet(self.out_channels, self.out_channels)
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         """PointNet Stem forward
 
         Args:
@@ -116,7 +123,7 @@ class Stem(nn.Module):
 
         # input transform
         if self.with_transform:
-            trans_input = self.transform_input(x)
+            trans_input = self.transform_input(x, mask)
             x = torch.bmm(trans_input, x)
             end_points["trans_input"] = trans_input
 
@@ -125,7 +132,7 @@ class Stem(nn.Module):
 
         # feature transform
         if self.with_transform:
-            trans_feature = self.transform_feature(x)
+            trans_feature = self.transform_feature(x, mask)
             x = torch.bmm(trans_feature, x)
             end_points["trans_feature"] = trans_feature
 
@@ -284,7 +291,10 @@ class CamHPointNet(nn.Module):
         self.init_weights()
 
     def _max_pool(self, x: torch.Tensor, mask: torch.Tensor):
-        return torch.max(x.masked_fill(mask == 0, -1e4), 2)[0]
+        if mask is None:
+            return torch.max(x, 2)[0]
+        min_value = torch.finfo(x.dtype).min  # approx 9.77e-4 for FP16
+        return torch.max(x.masked_fill(mask == 0, min_value), 2)[0]
 
     def _avg_pool(self, x: torch.Tensor, mask: torch.Tensor):
         eps = torch.finfo(x.dtype).eps  # approx 9.77e-4 for FP16
@@ -300,9 +310,9 @@ class CamHPointNet(nn.Module):
         x = data_batch["points"]
         mask = data_batch["mask"]
         # stem
-        x, end_points = self.stem(x)
+        x, end_points = self.stem(x, mask)
         # mlp for local features
-        x = self.mlp_local(x)
+        x = self.mlp_local(x, mask)
         # # max pool over points
         x = self.pool(x, mask)
         # mlp for global features
