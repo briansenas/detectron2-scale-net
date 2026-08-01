@@ -629,7 +629,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
             texts = {}
             texts["vfov"] = np.degrees(vfov_est[i].detach().cpu().numpy()[0])
             texts["pitch"] = np.degrees(pitch_est[i].detach().cpu().numpy()[0])
-            texts["roll"] = np.degrees(roll_est[i].detach().cpu().numpy())
+            texts["roll"] = np.degrees(roll_est[i].detach().cpu().numpy()[0])
             if self.height_on:
                 texts["yc_estCam"] = camrcnn_data["yc_est"][i][0].detach().cpu().numpy()
             v_pred = draw_labels(
@@ -686,7 +686,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
                 texts = {}
                 texts["vfov"] = np.degrees(vfov_est[i].detach().cpu().numpy()[0])
                 texts["pitch"] = np.degrees(pitch_est[i].detach().cpu().numpy()[0])
-                texts["roll"] = np.degrees(roll_est[i].detach().cpu().numpy())
+                texts["roll"] = np.degrees(roll_est[i].detach().cpu().numpy()[0])
                 if self.height_on:
                     texts["yc_estCam"] = camrcnn_data["yc_est"][i][0].detach().cpu().numpy()
                 v_pred = draw_labels(

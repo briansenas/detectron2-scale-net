@@ -32,7 +32,7 @@ from detectron2.data.common import (
     RatioSampler,
     ToIterableDataset,
 )
-from detectron2.data.samplers import InferenceSampler, TrainingSampler
+from detectron2.data.samplers import InferenceSampler, RandomSubsetTrainingSampler, TrainingSampler
 from detectron2.evaluation import (
     COCOEvaluator,
     COCOScaleEvaluator,
@@ -978,8 +978,16 @@ class HybridScaleTrainer(HybridTrainer):
         ratio = cfg.SOLVER.RATIO_PANO360
         dataloaders = []
         for i, dataset in enumerate(datasets):
-            dataset = ToIterableDataset(dataset, TrainingSampler(
-                len(dataset), ratio[i]), shard_chunk_size=batch_size)
+            sampler = TrainingSampler(len(dataset), shuffle=True, seed=cfg.SEED)
+            if cfg.DATALOADER.SAMPLER_TRAIN == "RandomSubsetTrainingSampler":
+                sampler = RandomSubsetTrainingSampler(
+                    len(dataset),
+                    subset_ratio=cfg.DATALOADER.RANDOM_SUBSET_RATIO,
+                    shuffle=True,
+                    seed_shuffle=cfg.SEED,
+                    seed_subset=cfg.SEED,
+                )
+            dataset = ToIterableDataset(dataset, sampler, shard_chunk_size=batch_size)
             dataloaders.append(
                 torchdata.DataLoader(
                     dataset,
@@ -1038,9 +1046,17 @@ class KittyCalibTrainer(HybridTrainer):
         generator.manual_seed(cfg.SEED)
         ratio = cfg.SOLVER.RATIO_PANO360
         dataloaders = []
-        for i, dataset in enumerate(datasets):
-            dataset = ToIterableDataset(dataset, TrainingSampler(
-                len(dataset), ratio[i]), shard_chunk_size=batch_size)
+        for dataset in datasets:
+            sampler = TrainingSampler(len(dataset), shuffle=True, seed=cfg.SEED)
+            if cfg.DATALOADER.SAMPLER_TRAIN == "RandomSubsetTrainingSampler":
+                sampler = RandomSubsetTrainingSampler(
+                    len(dataset),
+                    subset_ratio=cfg.DATALOADER.RANDOM_SUBSET_RATIO,
+                    shuffle=True,
+                    seed_shuffle=cfg.SEED,
+                    seed_subset=cfg.SEED,
+                )
+            dataset = ToIterableDataset(dataset, sampler, shard_chunk_size=batch_size)
             dataloaders.append(
                 torchdata.DataLoader(
                     dataset,
