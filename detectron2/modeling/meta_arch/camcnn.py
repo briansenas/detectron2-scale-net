@@ -735,7 +735,7 @@ class GeneralizedCamRCNN(GeneralizedRCNN):
         losses = {}
         losses.update(detector_losses)
         losses.update(proposal_losses)
-        return proposals, target_proposals, detector_losses
+        return proposals, target_proposals, losses
 
     def _forward_camrcnn(self, batched_inputs: List[Dict[str, torch.Tensor]], features, proposals):
         gt_instances = prepare_camrcnn_gt_instances(batched_inputs, criterion=self.camera_heads.loss_criterion)
