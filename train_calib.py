@@ -236,6 +236,9 @@ def main(args):
         trainer.resume_or_load(resume=args.resume_from_resume)
         model = trainer.model
         model_state_dict = model.state_dict()
+        # DDP Wrapper fix
+        if hasattr(model, "module"):
+            model = model.module
 
         def load_state_dict(exp_weights_path):
             checkpoint = torch.load(exp_weights_path, map_location="cpu")
